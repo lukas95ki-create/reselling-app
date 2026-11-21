@@ -191,6 +191,45 @@ tr.gesamt td { font-weight: 800; border-top: 2px solid var(--text); border-botto
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 30;
   background: var(--text); color: var(--bg); padding: 11px 18px; border-radius: 14px; max-width: 90vw; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
 .toast[hidden] { display: none; }
+/* Anklickbar */
+.klickbar { cursor: pointer; transition: transform .12s, box-shadow .12s, background-color .12s, opacity .12s; }
+.kachel.klickbar:hover, .eintrag.klickbar:hover, .hero.klickbar:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(16,24,40,.16); }
+.pille.klickbar:hover { filter: brightness(1.12); }
+tr.klickbar:hover td { background: var(--flaeche-2); }
+.hb-zeile.klickbar { border-radius: 10px; padding: 4px 6px; margin: 0 -6px; }
+.hb-zeile.klickbar:hover { background: var(--flaeche-2); }
+.blass, .hb-zeile.blass { opacity: .4; }
+.diagramm .balken.blass { opacity: .35; }
+.titelzeile { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.titelzeile .knopf { margin-bottom: 10px; }
+
+/* Monate auswählen */
+.monatswahl { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.monatswahl button { border: 1px solid var(--linie); background: var(--flaeche); color: var(--text-2); border-radius: 999px;
+  padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.monatswahl button.aktiv { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.monatswahl button.leer { opacity: .45; padding: 6px 12px; }
+
+/* Pakete / Bestellungen */
+.eintrag.versand.fertig { opacity: .55; }
+.eintrag.versand.fertig .haupt { text-decoration: line-through; }
+.haken { grid-row: span 2; position: relative; display: grid; place-items: center; width: 40px; height: 40px; cursor: pointer; }
+.haken input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.haken span { width: 28px; height: 28px; border-radius: 9px; border: 2px solid var(--linie); background: var(--flaeche-2);
+  display: grid; place-items: center; transition: background-color .15s, border-color .15s; }
+.haken input:checked + span { background: var(--gut); border-color: var(--gut); }
+.haken input:checked + span::after { content: '✓'; color: #fff; font-weight: 800; font-size: 16px; }
+.haken input:focus-visible + span { outline: 2px solid var(--akzent); outline-offset: 2px; }
+.schnellknopf { display: block; border: 1px solid var(--linie); background: var(--flaeche); border-radius: 16px; padding: 14px;
+  text-decoration: none; color: var(--text); box-shadow: var(--schatten); }
+.schnellknopf:first-child { background: linear-gradient(135deg, var(--hero-2), var(--akzent)); border-color: transparent; color: #fff; }
+.schnell .schnellknopf:first-child span { color: rgba(255,255,255,.85); }
+.nav button { position: relative; }
+.nav .zahl { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--krit); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+.nav .zahl[hidden] { display: none; }
+@media (min-width: 960px) { .nav .zahl { position: static; margin-left: auto; } }
+
 @media print {
   .kopf, .nav, .knopfleiste, .filter, .aktionen, .keindruck, .schnell { display: none !important; }
   main { margin: 0; padding: 0; } .hero { box-shadow: none; }

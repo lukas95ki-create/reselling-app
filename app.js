@@ -92,7 +92,7 @@ function aufbereiten(d) {
   const B = d.bestand.map(r => ({
     id: r[0], nr: r[1], datum: dat(r[2]), produkt: String(r[3]), kategorie: r[4], details: r[5], suchbegriff: r[6],
     menge: zahl(r[7]) || 0, ekStueck: zahl(r[8]) || 0, ekGesamt: zahl(r[9]) || 0, verkauft: zahl(r[10]) || 0,
-    rest: zahl(r[11]) || 0, status: r[12], lagerort: r[13], notiz: r[14]
+    rest: zahl(r[11]) || 0, status: r[12], lagerort: r[13], notiz: r[14], marktwert: zahl(r[15])
   }));
   const A = d.ausgaben.map(r => ({
     nr: r[0], datum: dat(r[1]), kategorie: r[2], beschreibung: r[3], haendler: r[4], betrag: zahl(r[5]) || 0,
@@ -141,7 +141,10 @@ function zeichnen() {
   if (!S.d) return;
   $('#stand').textContent = S.d.e.letzteAktualisierung ? 'Stand ' + new Date(S.d.e.letzteAktualisierung).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('aktiv', b.dataset.seite === S.seite));
-  ({ start: seiteStart, verkaeufe: seiteVerkaeufe, einkauf: seiteEinkauf, bestand: seiteBestand, ausgaben: seiteAusgaben, berichte: seiteBerichte })[S.seite]();
+  const erl = erledigtListe(), pakete = zuVersenden().filter(v => !erl[v.id]).length;
+  $('#navPakete').hidden = !pakete; $('#navPakete').textContent = pakete;
+  ({ start: seiteStart, verkaeufe: seiteVerkaeufe, einkauf: seiteEinkauf, bestand: seiteBestand, ausgaben: seiteAusgaben,
+    berichte: seiteBerichte, auswertung: seiteAuswertung, versand: seiteVersand })[S.seite]();
   window.scrollTo(0, 0);
 }
 
@@ -176,60 +179,89 @@ function monatsWerte(jahr) {
   });
 }
 
-// Säulendiagramm Umsatz pro Monat – eine Reihe, Tooltip beim Drüberfahren/Tippen
-function monatsDiagramm(jahr) {
-  const D = monatsWerte(jahr);
-  const max = rundeHoch(Math.max(...D.map(d => d.umsatz)));
-  const W = 640, H = 230, L = 46, R = 6, T = 10, B = 26, ph = H - T - B, bw = (W - L - R) / 12, bb = Math.min(30, bw * 0.62);
+// Säulendiagramm (eine Reihe). D = [{ label, wert, tipp, blass }]; beiKlick(i) optional.
+let DIA_NR = 0;
+function saeulen(D, beiKlick, titel) {
+  const id = 'dia' + (++DIA_NR);
+  const n = D.length, max = rundeHoch(Math.max(...D.map(d => d.wert)));
+  const W = 640, H = 230, L = 46, R = 6, T = 10, B = 26, ph = H - T - B, bw = (W - L - R) / n, bb = Math.min(30, bw * 0.66);
   const y = v => T + ph - v / max * ph;
   const gitter = [0, max / 2, max].map(v => `<line class="gitter" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>
     <text class="achse" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${eurKurz(v)}</text>`).join('');
-  const saeulen = D.map((d, i) => {
-    const x = L + i * bw + (bw - bb) / 2, h = Math.max(0, ph - (y(d.umsatz) - T)), r = Math.min(4, h);
-    const top = T + ph - h;
+  const zeigLabel = i => n <= 14 || i === 0 || (i + 1) % 5 === 0 || i === n - 1;
+  const s = D.map((d, i) => {
+    const x = L + i * bw + (bw - bb) / 2, h = Math.max(0, ph - (y(d.wert) - T)), r = Math.min(4, h, bb / 2), top = T + ph - h;
     const pfad = h > 0 ? `M${x},${T + ph} V${top + r} Q${x},${top} ${x + r},${top} H${x + bb - r} Q${x + bb},${top} ${x + bb},${top + r} V${T + ph} Z` : '';
-    return `<g data-i="${i}"><rect class="treffer" x="${L + i * bw}" y="${T}" width="${bw}" height="${ph + B}"/>
-      ${pfad ? `<path class="balken" d="${pfad}"/>` : ''}
-      <text class="achse" x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${d.m}</text></g>`;
+    return `<g data-i="${i}" class="${beiKlick ? 'klickbar' : ''}"><rect class="treffer" x="${L + i * bw}" y="${T}" width="${bw}" height="${ph + B}"/>
+      ${pfad ? `<path class="balken ${d.blass ? 'blass' : ''}" d="${pfad}"/>` : ''}
+      ${zeigLabel(i) ? `<text class="achse" x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${d.label}</text>` : ''}</g>`;
   }).join('');
-  return { html: `<div class="diagramm" id="dMonat"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Umsatz pro Monat ${jahr}">${gitter}${saeulen}</svg><div class="tipp" hidden></div></div>`,
+  return { html: `<div class="diagramm" id="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(titel || 'Diagramm')}">${gitter}${s}</svg><div class="tipp" hidden></div></div>`,
     verbinden: () => {
-      const box = $('#dMonat'); if (!box) return;
+      const box = document.getElementById(id); if (!box) return;
       const tipp = $('.tipp', box), svg = $('svg', box);
       box.querySelectorAll('g[data-i]').forEach(g => {
-        const zeig = () => {
-          const d = D[g.dataset.i];
+        const i = Number(g.dataset.i), d = D[i];
+        g.addEventListener('mouseenter', () => {
           box.querySelectorAll('g.aktiv').forEach(x => x.classList.remove('aktiv')); g.classList.add('aktiv');
-          tipp.innerHTML = `<b>${monatName(d.key)}</b><br>Umsatz ${eur(d.umsatz)}<br>Gewinn ${eur(d.gewinn)}${d.offen ? ` <span style="opacity:.7">(${d.offen} offen)</span>` : ''}<br>${d.n} Verkäufe`;
+          tipp.innerHTML = d.tipp + (beiKlick ? '<br><span style="opacity:.7">Klicken für Details</span>' : '');
           const rs = svg.getBoundingClientRect(), rb = box.getBoundingClientRect();
-          const i = Number(g.dataset.i), xs = (L + i * bw + bw / 2) / W * rs.width;
-          tipp.style.left = Math.min(rb.width - 70, Math.max(70, xs)) + 'px';
-          tipp.style.top = ((y(d.umsatz)) / H * rs.height) + 'px';
+          tipp.style.left = Math.min(rb.width - 80, Math.max(80, (L + i * bw + bw / 2) / W * rs.width)) + 'px';
+          tipp.style.top = (y(d.wert) / H * rs.height) + 'px';
           tipp.hidden = false;
-        };
-        g.addEventListener('mouseenter', zeig); g.addEventListener('click', zeig);
+        });
+        if (beiKlick) g.addEventListener('click', () => beiKlick(i));
       });
       box.addEventListener('mouseleave', () => { tipp.hidden = true; box.querySelectorAll('g.aktiv').forEach(x => x.classList.remove('aktiv')); });
     } };
 }
 
+const tippMonat = (titel, V) => {
+  const u = V.reduce((s, v) => s + umsatzVon(v), 0), g = V.reduce((s, v) => s + (v.gewinn || 0), 0), o = V.filter(v => v.gewinn === null).length;
+  return `<b>${titel}</b><br>Umsatz ${eur(r2(u))}<br>Gewinn ${eur(r2(g))}${o ? ` <span style="opacity:.7">(${o} offen)</span>` : ''}<br>${V.length} Verkäufe`;
+};
+
+// Umsatz pro Monat eines Jahres; markierte Monate kräftig, Rest blass. Klick → Auswertung des Monats
+function monatsDiagramm(jahr, markiert) {
+  const D = MONATE_KURZ.map((m, i) => {
+    const key = jahr + '-' + String(i + 1).padStart(2, '0');
+    const V = S.d.V.filter(v => v.monat === key && aktiv(v));
+    return { key, label: m, wert: r2(V.reduce((s, v) => s + umsatzVon(v), 0)), tipp: tippMonat(monatName(key), V),
+      blass: markiert && markiert.length && !markiert.includes(key) };
+  });
+  return saeulen(D, i => auswertung({ jahr, monate: [D[i].key] }), 'Umsatz pro Monat ' + jahr);
+}
+
+// Umsatz pro Tag eines Monats
+function tagesDiagramm(key) {
+  const j = Number(key.slice(0, 4)), m = Number(key.slice(5, 7)) - 1, tage = new Date(j, m + 1, 0).getDate();
+  const D = [];
+  for (let t = 1; t <= tage; t++) {
+    const V = S.d.V.filter(v => aktiv(v) && v.monat === key && v.datum.getDate() === t);
+    D.push({ label: String(t), wert: r2(V.reduce((s, v) => s + umsatzVon(v), 0)), tipp: tippMonat(t + '. ' + monatName(key), V) });
+  }
+  return saeulen(D, null, 'Umsatz pro Tag ' + monatName(key));
+}
+
 // Farbe folgt dem Konto (feste Reihenfolge nach Namen), nie dem Rang
+const kontoName = v => v.plattform + ' · ' + v.konto;
 function kontoFarben() {
-  const namen = [...new Set(S.d.V.map(v => v.plattform + ' · ' + v.konto))].sort();
+  const namen = [...new Set(S.d.V.map(kontoName))].sort();
   const f = {}; namen.forEach((n, i) => { f[n] = i < 4 ? `var(--s${i + 1})` : 'var(--leise)'; });
   return f;
 }
 
-function kontoBalken(V) {
+// Balken je Konto – Klick filtert (Funktion beiKlick bekommt den Kontonamen)
+function kontoBalken(V, aktivesKonto) {
   const farbe = kontoFarben(), proKonto = {};
-  V.forEach(v => { const k = v.plattform + ' · ' + v.konto; const p = proKonto[k] || (proKonto[k] = { u: 0, n: 0, g: 0 }); p.u += umsatzVon(v); p.n++; p.g += v.gewinn || 0; });
+  V.forEach(v => { const k = kontoName(v); const p = proKonto[k] || (proKonto[k] = { u: 0, n: 0, g: 0 }); p.u += umsatzVon(v); p.n++; p.g += v.gewinn || 0; });
   const L = Object.entries(proKonto).sort((a, b) => b[1].u - a[1].u);
   const max = Math.max(1, ...L.map(x => x[1].u));
-  return L.length ? `<div class="hbalken">${L.map(([k, p]) => `<div class="hb-zeile">
+  return L.length ? `<div class="hbalken">${L.map(([k, p]) => `<div class="hb-zeile klickbar ${aktivesKonto && aktivesKonto !== k ? 'blass' : ''}" data-konto="${esc(k)}" title="Nur ${esc(k)} anzeigen">
       <div class="hb-name"><span class="punkt" style="background:${farbe[k]}"></span>${esc(k)}</div>
       <div class="hb-wert">${eur(r2(p.u))} <span class="leise klein">· ${p.n}</span></div>
       <div class="hb-bahn"><div style="width:${p.u / max * 100}%;background:${farbe[k]}"></div></div></div>`).join('')}</div>`
-    : '<div class="leer">Noch keine Verkäufe.</div>';
+    : '<div class="leer">Keine Verkäufe.</div>';
 }
 
 function grenzeRing(k) {
@@ -238,15 +270,38 @@ function grenzeRing(k) {
   const st = p >= 100 ? ['krit', '⛔', 'Über der Grenze'] : p >= 80 ? ['warn', '⚠', 'Knapp – aufpassen'] : ['gut', '✓', 'Im grünen Bereich'];
   const farbe = { gut: 'var(--gut)', warn: 'var(--warn)', krit: 'var(--krit)' }[st[0]];
   const U = 2 * Math.PI * 46, voll = Math.min(100, p) / 100 * U;
-  return `<div class="ring"><svg viewBox="0 0 112 112" role="img" aria-label="Hochrechnung ${Math.round(p)} Prozent der Grenze">
+  return `<div class="ring klickbar" onclick="grenzeDialog()" title="Details zur Grenze"><svg viewBox="0 0 112 112" role="img" aria-label="Hochrechnung ${Math.round(p)} Prozent der Grenze">
       <circle cx="56" cy="56" r="46" fill="none" stroke="var(--flaeche-2)" stroke-width="11"/>
       <circle cx="56" cy="56" r="46" fill="none" stroke="${farbe}" stroke-width="11" stroke-linecap="round"
         stroke-dasharray="${voll} ${U}" transform="rotate(-90 56 56)"/>
       <text x="56" y="62" text-anchor="middle" style="font-size:20px;font-weight:800;fill:var(--text)">${Math.round(p)}%</text></svg>
     <div><span class="status ${st[0]}">${st[1]} ${st[2]}</span>
       <div class="klein" style="margin-top:8px">Hochrechnung bis 31.12.: <b>${eur(k.hochrechnung)}</b></div>
-      <div class="klein leise">Grenze ${eur(g)} · bisher ${eur(k.umsatz)}</div></div></div>`;
+      <div class="klein leise">Grenze ${eur(g)} · bisher ${eur(k.umsatz)}</div>
+      <div class="klein" style="margin-top:4px;color:var(--akzent)">Details ›</div></div></div>`;
 }
+
+// Erklärung der Grenze + Verlauf Monat für Monat
+function grenzeDialog() {
+  const j = new Date().getFullYear(), k = jahresZahlen(j), g = S.d.e.grenzeVorjahr || 25000, gl = S.d.e.grenzeLaufend || 100000;
+  let summe = S.d.e.sonstigerUmsatz || 0;
+  const zeilen = MONATE_KURZ.map((m, i) => {
+    const key = j + '-' + String(i + 1).padStart(2, '0');
+    const u = S.d.V.filter(v => v.monat === key && aktiv(v)).reduce((s, v) => s + umsatzVon(v), 0);
+    summe += u;
+    return i <= new Date().getMonth() ? `<tr><td>${monatName(key)}</td><td>${eur(r2(u))}</td><td>${eur(r2(summe))}</td><td>${Math.round(summe / g * 100)} %</td></tr>` : '';
+  }).join('');
+  dialog(`<h2 style="margin-top:0">Kleinunternehmer-Grenze ${j}</h2>
+    <div class="klein">Zählt: Umsatz aller Konten (Preis + Versand, abzüglich Erstattungen)${S.d.e.sonstigerUmsatz ? ' plus sonstiger Umsatz' : ''}.</div>
+    <div class="tabelle-scroll" style="margin-top:10px"><table><tr><th>Monat</th><th>Umsatz</th><th>Summe</th><th>Grenze</th></tr>${zeilen}</table></div>
+    <div class="hinweis klein"><b>Die Regeln (§19 UStG):</b><br>
+      • Über <b>${eur(g)}</b> in diesem Jahr → <b>nächstes Jahr</b> keine Kleinunternehmerregelung.<br>
+      • Über <b>${eur(gl)}</b> im laufenden Jahr → <b>sofort</b> umsatzsteuerpflichtig.<br>
+      Hochrechnung: bisher ${eur(k.umsatz)} in ${k.tage} Tagen → <b>${eur(k.hochrechnung)}</b> bis 31.12.
+      Bei 80 % bekommst du automatisch eine Mail. Kein Ersatz für Steuerberatung.</div>
+    <div class="knopfleiste"><button class="knopf" onclick="dialogZu()">Schließen</button></div>`);
+}
+window.grenzeDialog = grenzeDialog;
 
 // ---------- Seite: Start ----------
 function seiteStart() {
@@ -257,25 +312,29 @@ function seiteStart() {
   const kapital = lager.reduce((s, b) => s + b.rest * b.ekStueck, 0);
   const monat = iso().slice(0, 7);
   const km = S.d.V.filter(v => v.monat === monat && aktiv(v));
-  const versenden = S.d.V.filter(v => aktiv(v) && /versenden|^Bezahlt$/.test(v.status));
+  const erlV = erledigtListe(), versenden = zuVersenden().filter(v => !erlV[v.id]);
   const gebuehren = k.V.reduce((s, v) => s + (v.gebuehren || 0), 0);
   const zuletzt = S.d.V.slice().sort((a, b) => b.datum - a.datum).slice(0, 5);
   const dia = monatsDiagramm(j);
+  const marktwert = lager.reduce((s, b) => s + b.rest * (marktwertVon(b) || b.ekStueck), 0);
+  const alt = ladenhueter();
   inhalt().innerHTML = `
     <div class="hero">
-      <div class="label">Umsatz ${j} · alle Konten</div>
-      <div class="gross">${eur(k.umsatz)}</div>
+      <div class="klickbar" onclick="auswertung({jahr:${j},monate:[]})" title="Auswertung öffnen">
+        <div class="label">Umsatz ${j} · alle Konten ›</div>
+        <div class="gross">${eur(k.umsatz)}</div>
+      </div>
       <div class="reihe-h">
-        <div class="pille"><div class="k">Gewinn ${k.offen ? `(${k.V.length - k.offen} von ${k.V.length} mit EK)` : ''}</div><div class="w">${eur(k.gewinn)}</div></div>
-        <div class="pille"><div class="k">${new Date().toLocaleDateString('de-DE', { month: 'long' })}</div><div class="w">${eur(r2(km.reduce((s, v) => s + umsatzVon(v), 0)))}</div></div>
-        <div class="pille"><div class="k">Verkäufe ${j}</div><div class="w">${k.V.length}</div></div>
+        <div class="pille klickbar" onclick="auswertung({jahr:${j},monate:[]})"><div class="k">Gewinn ${k.offen ? `(${k.V.length - k.offen} von ${k.V.length} mit EK)` : ''}</div><div class="w">${eur(k.gewinn)}</div></div>
+        <div class="pille klickbar" onclick="auswertung({jahr:${j},monate:['${monat}']})"><div class="k">${new Date().toLocaleDateString('de-DE', { month: 'long' })} ›</div><div class="w">${eur(r2(km.reduce((s, v) => s + umsatzVon(v), 0)))}</div></div>
+        <div class="pille klickbar" onclick="geheZu('verkaeufe')"><div class="k">Verkäufe ${j} ›</div><div class="w">${k.V.length}</div></div>
       </div>
     </div>
     <div class="kacheln">
-      <div class="kachel ${offen.length ? 'warnung' : ''}" onclick="filterSetzen('ekfehlt')" style="cursor:pointer"><div class="ic">🧾</div><div class="wert">${offen.length}</div><div class="text">Einkaufspreis fehlt</div></div>
-      <div class="kachel" onclick="filterSetzen('versenden')" style="cursor:pointer"><div class="ic">📮</div><div class="wert">${versenden.length}</div><div class="text">Noch versenden</div></div>
-      <div class="kachel" onclick="geheZu('bestand')" style="cursor:pointer"><div class="ic">📦</div><div class="wert">${eur(r2(kapital))}</div><div class="text">In Ware · ${lager.reduce((s, b) => s + b.rest, 0)} Stück</div></div>
-      <div class="kachel"><div class="ic">💸</div><div class="wert">${eur(r2(gebuehren))}</div><div class="text">Gebühren ${j}</div></div>
+      <div class="kachel klickbar ${offen.length ? 'warnung' : ''}" onclick="filterSetzen('ekfehlt')"><div class="ic">🧾</div><div class="wert">${offen.length}</div><div class="text">Einkaufspreis fehlt ›</div></div>
+      <div class="kachel klickbar ${versenden.length ? 'warnung' : ''}" onclick="geheZu('versand')"><div class="ic">📮</div><div class="wert">${versenden.length}</div><div class="text">Noch versenden ›</div></div>
+      <div class="kachel klickbar" onclick="geheZu('bestand')"><div class="ic">📦</div><div class="wert">${eur(r2(kapital))}</div><div class="text">Einkauf · Marktwert ${eur(r2(marktwert))} ›</div></div>
+      <div class="kachel klickbar" onclick="auswertung({jahr:${j},monate:[]})"><div class="ic">💸</div><div class="wert">${eur(r2(gebuehren))}</div><div class="text">Gebühren ${j} ›</div></div>
     </div>
     <div class="raster zwei">
       <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3><span class="leise klein">${j}</span></div>${dia.html}</div>
@@ -288,16 +347,21 @@ function seiteStart() {
       <button onclick="geheZu('einkauf')"><b>🛒 Einkauf erfassen</b><span>mit Beleg-Foto</span></button>
       <button onclick="ausgabeDialog()"><b>🧾 Ausgabe erfassen</b><span>Versandmaterial, Abo …</span></button>
     </div>
+    ${alt.length ? `<h2>⏳ Ladenhüter <span class="chip gelb">${alt.length}</span></h2>
+      <p class="leise klein" style="margin-top:-6px">Länger als ${LADENHUETER_TAGE} Tage im Bestand – Kapital frei machen?</p>
+      <div class="liste">${alt.slice(0, 4).map(zeileBestand).join('')}</div>
+      ${alt.length > 4 ? `<p class="klein"><a href="#" onclick="S.filter.b={suche:'',alle:false,nur:'alt'};geheZu('bestand');return false">Alle ${alt.length} Ladenhüter →</a></p>` : ''}` : ''}
     ${offen.length ? `<h2>Einkaufspreis fehlt</h2><div class="liste">${offen.slice(0, 5).map(zeileVerkauf).join('')}</div>
       ${offen.length > 5 ? `<p class="leise klein"><a href="#" onclick="filterSetzen('ekfehlt');return false">Alle ${offen.length} anzeigen →</a></p>` : ''}` : ''}
     <h2>Zuletzt verkauft</h2>
     <div class="liste">${zuletzt.map(zeileVerkauf).join('') || '<div class="leer">Noch keine Verkäufe.</div>'}</div>
     ${S.d.e.fehler && S.d.e.fehler !== '–' ? `<div class="hinweis klein">Letzter Abruf meldet: ${esc(S.d.e.fehler)}</div>` : ''}`;
   dia.verbinden();
+  document.querySelectorAll('[data-konto]').forEach(z => z.onclick = () => auswertung({ jahr: j, monate: [], konto: z.dataset.konto }));
   aktionenVerbinden();
 }
 
-function filterSetzen(nur) { S.filter.v = { suche: '', monat: '', plattform: '', nur }; geheZu('verkaeufe'); }
+function filterSetzen(nur) { S.filter.v = { suche: '', monat: '', plattform: '', konto: '', nur }; geheZu('verkaeufe'); }
 window.filterSetzen = filterSetzen;
 
 // ---------- Verkäufe ----------
@@ -306,7 +370,7 @@ function zeileVerkauf(v) {
   const gew = v.gewinn !== null ? `<span class="gewinn ${v.gewinn >= 0 ? 'plus' : 'minus'}">${v.gewinn >= 0 ? '+' : ''}${eur(v.gewinn)}</span>`
     : (aktiv(v) ? `<span class="chip gelb">${esc(v.gewinnText || 'offen')}</span>` : '');
   const cm = v.plattform === 'Cardmarket';
-  return `<div class="eintrag ${fehlt ? 'offen' : ''}">
+  return `<div class="eintrag klickbar ${fehlt ? 'offen' : ''}" data-verkauf="${esc(v.id)}">
     <div class="avatar ${cm ? 'av-cm' : 'av-eb'}">${cm ? 'CM' : 'eB'}</div>
     <div class="haupt" title="${esc(v.artikel)}">${esc(v.artikel)}</div><div class="rechts">${eur(umsatzVon(v))}</div>
     <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span>${gew}
@@ -321,11 +385,13 @@ function zeileVerkauf(v) {
 }
 
 function seiteVerkaeufe() {
-  const f = S.filter.v || (S.filter.v = { suche: '', monat: '', plattform: '', nur: '' });
+  const f = S.filter.v || (S.filter.v = { suche: '', monat: '', plattform: '', konto: '', nur: '' });
+  const konten = [...new Set(S.d.V.map(kontoName))].sort();
   const monate = [...new Set(S.d.V.map(v => v.monat))].filter(Boolean).sort().reverse();
   let L = S.d.V.slice().sort((a, b) => b.datum - a.datum);
   if (f.monat) L = L.filter(v => v.monat === f.monat);
   if (f.plattform) L = L.filter(v => v.plattform === f.plattform);
+  if (f.konto) L = L.filter(v => kontoName(v) === f.konto);
   if (f.nur === 'ekfehlt') L = L.filter(v => v.ek === null && aktiv(v) && v.status !== 'Unbezahlt');
   if (f.nur === 'versenden') L = L.filter(v => /versenden|Bezahlt$/.test(v.status));
   if (f.suche) { const s = f.suche.toLowerCase(); L = L.filter(v => (v.artikel + ' ' + v.kaeufer + ' ' + v.bestellnr).toLowerCase().includes(s)); }
@@ -336,17 +402,22 @@ function seiteVerkaeufe() {
       <input id="fSuche" placeholder="Suchen …" value="${esc(f.suche)}">
       <select id="fMonat"><option value="">Alle Monate</option>${monate.map(m => `<option value="${m}" ${m === f.monat ? 'selected' : ''}>${monatName(m)}</option>`).join('')}</select>
       <select id="fPlatt"><option value="">Alle Plattformen</option>${['eBay', 'Cardmarket'].map(p => `<option ${p === f.plattform ? 'selected' : ''}>${p}</option>`).join('')}</select>
+      <select id="fKonto"><option value="">Alle Konten</option>${konten.map(k => `<option ${k === f.konto ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
       <select id="fNur"><option value="">Alle</option><option value="ekfehlt" ${f.nur === 'ekfehlt' ? 'selected' : ''}>EK fehlt</option><option value="versenden" ${f.nur === 'versenden' ? 'selected' : ''}>Noch versenden</option></select>
     </div>
     <p class="leise klein">${L.length} Verkäufe · Umsatz ${eur(r2(summe))}</p>
     <div class="liste">${L.slice(0, 200).map(zeileVerkauf).join('') || '<div class="leer">Keine Verkäufe gefunden.</div>'}</div>`;
-  const neu = () => { f.suche = $('#fSuche').value; f.monat = $('#fMonat').value; f.plattform = $('#fPlatt').value; f.nur = $('#fNur').value; seiteVerkaeufe(); };
-  ['#fMonat', '#fPlatt', '#fNur'].forEach(s => $(s).onchange = neu);
+  const neu = () => { f.suche = $('#fSuche').value; f.monat = $('#fMonat').value; f.plattform = $('#fPlatt').value; f.konto = $('#fKonto').value; f.nur = $('#fNur').value; seiteVerkaeufe(); };
+  ['#fMonat', '#fPlatt', '#fKonto', '#fNur'].forEach(s => $(s).onchange = neu);
   $('#fSuche').onchange = neu;
   aktionenVerbinden();
 }
 
 function aktionenVerbinden() {
+  document.querySelectorAll('[data-verkauf]').forEach(k => k.onclick = e => {
+    if (e.target.closest('button, a, input, label')) return;
+    verkaufDialog(k.dataset.verkauf);
+  });
   document.querySelectorAll('[data-zuordnen]').forEach(b => b.onclick = () => zuordnenDialog(b.dataset.zuordnen));
   document.querySelectorAll('[data-porto]').forEach(b => b.onclick = () => portoDialog(b.dataset.porto));
   document.querySelectorAll('[data-artikel]').forEach(b => b.onclick = () => artikelDialog(b.dataset.artikel));
@@ -447,7 +518,8 @@ function positionHtml(i) {
 function seiteEinkauf() {
   const E = S.d.E.slice().sort((a, b) => b.datum - a.datum);
   inhalt().innerHTML = `
-    <h1 id="eTitel">Einkauf erfassen</h1>
+    <div class="titelzeile"><h1 id="eTitel">Einkauf erfassen</h1>
+      <button class="knopf zwei klein keindruck" onclick="geheZu('ausgaben')">🧾 Ausgaben ›</button></div>
     <div class="karte" id="eForm">
       <div class="reihe">
         <div><label>Datum</label><input id="eDatum" type="date" value="${iso()}"></div>
@@ -533,32 +605,53 @@ async function belegLesen(datei) {
 
 // ---------- Bestand ----------
 function zeileBestand(b) {
-  const tage = b.datum ? Math.floor((Date.now() - b.datum) / 864e5) : 0;
-  return `<div class="eintrag">
+  const tage = tageIm(b), mw = marktwertVon(b);
+  const plus = mw ? r2((mw - b.ekStueck) * b.rest) : null;
+  const alt = tage > LADENHUETER_TAGE && b.rest > 0;
+  const tipp = alt ? (mw ? `Tipp: für ca. ${eur(r2(Math.max(b.ekStueck * 1.05, mw * 0.92)))} anbieten – Kapital frei machen` : 'Tipp: Marktwert eintragen und Preis prüfen') : '';
+  return `<div class="eintrag ${alt ? 'offen' : ''}">
     <div class="avatar av-be">${b.rest}</div>
     <div class="haupt" title="${esc(b.produkt)}">${esc(b.produkt)}</div><div class="rechts">${eur(r2(b.rest * b.ekStueck))}</div>
     <div class="unter"><span>${b.rest} von ${b.menge} · EK ${eur(b.ekStueck)}/Stk</span>
-      <span class="chip ${tage > 45 && b.rest > 0 ? 'gelb' : ''}">${tage} Tage</span><span class="chip">${esc(b.status)}</span>
+      ${mw ? `<span>Markt ${eur(mw)}/Stk <b class="${plus >= 0 ? 'plus' : 'minus'}">${plus >= 0 ? '+' : ''}${eur(plus)}</b></span>` : '<span class="chip">Marktwert fehlt</span>'}
+      <span class="chip ${alt ? 'gelb' : ''}">${tage} Tage</span><span class="chip">${esc(b.status)}</span>
       ${b.suchbegriff ? `<span>🔎 ${esc(b.suchbegriff)}</span>` : ''}</div>
-    <div class="aktionen keindruck"><span class="chip">${esc(b.id)}</span><button class="knopf klein zwei" data-artikel="${esc(b.id)}">Bearbeiten</button></div>
+    ${tipp ? `<div class="unter" style="grid-column:2/4"><span class="warn">💡 ${tipp}</span></div>` : ''}
+    <div class="aktionen keindruck"><button class="knopf klein zwei" data-sku="${esc(b.id)}" title="Als SKU ins eBay-Angebot eintragen – dann wird der Verkauf automatisch zugeordnet">📋 SKU ${esc(b.id)}</button>
+      <button class="knopf klein zwei" data-artikel="${esc(b.id)}">Bearbeiten</button></div>
   </div>`;
 }
 
 function seiteBestand() {
-  const f = S.filter.b || (S.filter.b = { suche: '', alle: false });
-  let L = (f.alle ? S.d.B : imBestand()).slice().sort((a, b) => (a.datum || 0) - (b.datum || 0));
+  const f = S.filter.b || (S.filter.b = { suche: '', alle: false, nur: '' });
+  let L = (f.alle ? S.d.B : f.nur === 'alt' ? ladenhueter() : imBestand()).slice().sort((a, b) => (a.datum || 0) - (b.datum || 0));
   if (f.suche) { const s = f.suche.toLowerCase(); L = L.filter(b => (b.produkt + ' ' + b.id + ' ' + (b.suchbegriff || '')).toLowerCase().includes(s)); }
   const wert = L.reduce((s, b) => s + b.rest * b.ekStueck, 0);
+  const markt = L.reduce((s, b) => s + b.rest * (marktwertVon(b) || b.ekStueck), 0);
+  const stueck = L.reduce((s, b) => s + b.rest, 0);
   inhalt().innerHTML = `
     <h1>Bestand</h1>
-    <div class="filter keindruck">
-      <input id="bSuche" placeholder="Suchen …" value="${esc(f.suche)}">
-      <select id="bAlle"><option value="">Nur vorhandene</option><option value="1" ${f.alle ? 'selected' : ''}>Alle (auch verkauft)</option></select>
+    <div class="hero" style="padding:18px 20px">
+      <div class="label">Warenwert (Einkauf)</div>
+      <div class="gross" style="font-size:34px">${eur(r2(wert))}</div>
+      <div class="reihe-h">
+        <div class="pille"><div class="k">Marktwert</div><div class="w">${eur(r2(markt))}</div></div>
+        <div class="pille"><div class="k">möglicher Gewinn</div><div class="w">${eur(r2(markt - wert))}</div></div>
+        <div class="pille"><div class="k">Stück</div><div class="w">${stueck}</div></div>
+      </div>
     </div>
-    <p class="leise klein">${L.length} Positionen · Warenwert ${eur(r2(wert))}</p>
+    <div class="filter keindruck" style="margin-top:14px">
+      <input id="bSuche" placeholder="Suchen …" value="${esc(f.suche)}">
+      <select id="bAlle"><option value="">Nur vorhandene</option><option value="alt" ${f.nur === 'alt' ? 'selected' : ''}>Nur Ladenhüter (&gt; ${LADENHUETER_TAGE} Tage)</option><option value="alle" ${f.alle ? 'selected' : ''}>Alle (auch verkauft)</option></select>
+    </div>
+    <p class="leise klein">${L.length} Positionen. Tipp: Trag die Artikel-ID als <b>SKU</b> in dein eBay-Angebot ein – dann wird der Verkauf automatisch zugeordnet.</p>
     <div class="liste">${L.map(zeileBestand).join('') || '<div class="leer">Kein Bestand. Einkäufe erscheinen hier automatisch.</div>'}</div>`;
   $('#bSuche').onchange = e => { f.suche = e.target.value; seiteBestand(); };
-  $('#bAlle').onchange = e => { f.alle = !!e.target.value; seiteBestand(); };
+  $('#bAlle').onchange = e => { f.alle = e.target.value === 'alle'; f.nur = e.target.value === 'alt' ? 'alt' : ''; seiteBestand(); };
+  document.querySelectorAll('[data-sku]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.sku); toast('SKU kopiert: ' + b.dataset.sku + ' – bei eBay ins Feld „SKU“ einfügen'); }
+    catch (e) { toast('SKU: ' + b.dataset.sku); }
+  });
   aktionenVerbinden();
 }
 
@@ -571,12 +664,15 @@ function artikelDialog(id) {
     <label>Suchbegriff (automatische Zuordnung)</label><input id="aSuch" value="${esc(b.suchbegriff)}">
     <div class="reihe"><div><label>Status</label><select id="aStat">${st.map(s => `<option ${s === b.status ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
       <div><label>Lagerort</label><input id="aOrt" value="${esc(b.lagerort)}"></div></div>
+    <div class="reihe"><div><label>Marktwert pro Stück €</label><input id="aMarkt" inputmode="decimal" value="${marktwertVon(b) !== null ? String(marktwertVon(b)).replace('.', ',') : ''}" placeholder="z. B. 120,00"></div>
+      <div><label>&nbsp;</label><a class="knopf zwei klein" style="display:inline-block" target="_blank" rel="noopener"
+        href="https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(b.produkt.replace(/[–()]/g, ' '))}&LH_Sold=1&LH_Complete=1">eBay: verkaufte Preise ansehen</a></div></div>
     <label>Notiz</label><input id="aNotiz" value="${esc(b.notiz)}">
     <div class="knopfleiste"><button class="knopf" id="aOk">Speichern</button><button class="knopf zwei" onclick="dialogZu()">Abbrechen</button></div>`,
   box => {
     $('#aOk', box).onclick = () => speichern('artikelAendern', { artikelId: id, felder: {
       produkt: $('#aProd', box).value, suchbegriff: $('#aSuch', box).value, status: $('#aStat', box).value,
-      lagerort: $('#aOrt', box).value, notiz: $('#aNotiz', box).value } }, 'Gespeichert');
+      lagerort: $('#aOrt', box).value, notiz: $('#aNotiz', box).value, marktwert: $('#aMarkt', box).value } }, 'Gespeichert');
   });
 }
 
@@ -659,8 +755,6 @@ function seiteBerichte() {
   const e = euer(j);
   const k = jahresZahlen(j);
   const sum = f => r2(M.reduce((s, x) => s + x[f], 0));
-  const plattformen = {};
-  k.V.forEach(v => { const p = plattformen[v.plattform + ' · ' + v.konto] || (plattformen[v.plattform + ' · ' + v.konto] = { n: 0, u: 0, g: 0 }); p.n++; p.u += umsatzVon(v); p.g += v.gewinn || 0; });
   const dia = monatsDiagramm(j);
   inhalt().innerHTML = `
     <h1>Berichte</h1>
@@ -682,11 +776,20 @@ function seiteBerichte() {
     <h2>Monate ${j}</h2>
     <div class="karte tabelle-scroll"><table>
       <tr><th>Monat</th><th>Verk.</th><th>Umsatz</th><th>Gebühren</th><th>Porto</th><th>Gewinn</th><th>Einkauf</th><th>Ausgaben</th></tr>
-      ${M.map(x => `<tr><td>${monatName(x.key)}</td><td>${x.anzahl}</td><td>${eur(x.umsatz)}</td><td>${eur(x.gebuehren)}</td><td>${eur(x.porto)}</td>
+      ${M.map(x => `<tr class="klickbar" data-mk="${x.key}" title="Monat öffnen"><td>${monatName(x.key)} ›</td><td>${x.anzahl}</td><td>${eur(x.umsatz)}</td><td>${eur(x.gebuehren)}</td><td>${eur(x.porto)}</td>
         <td class="${x.gewinn >= 0 ? 'plus' : 'minus'}">${eur(x.gewinn)}${x.offen ? ` <span class="chip gelb">${x.offen} offen</span>` : ''}</td><td>${eur(x.einkauf)}</td><td>${eur(x.ausgaben)}</td></tr>`).join('')}
       <tr class="gesamt"><td>Gesamt</td><td>${M.reduce((s, x) => s + x.anzahl, 0)}</td><td>${eur(sum('umsatz'))}</td><td>${eur(sum('gebuehren'))}</td><td>${eur(sum('porto'))}</td><td>${eur(sum('gewinn'))}</td><td>${eur(sum('einkauf'))}</td><td>${eur(sum('ausgaben'))}</td></tr>
     </table></div>
-    <p class="leise klein">„Gewinn“ = pro Verkauf (Preis + Versand − Gebühren − Porto − Einkaufspreis). „Offen“ = Einkaufspreis oder Porto fehlt.</p>
+    <p class="leise klein">„Gewinn“ = pro Verkauf (Preis + Versand − Gebühren − Porto − Einkaufspreis). „Offen“ = Einkaufspreis oder Porto fehlt. Zeile antippen = Monat öffnen.</p>
+
+    <h2>Was lohnt sich? Nach Produktart ${j}</h2>
+    <div class="karte tabelle-scroll"><table>
+      <tr><th>Produktart</th><th>Verk.</th><th>Umsatz</th><th>Ø Preis</th><th>Gewinn</th><th>Marge</th></tr>
+      ${produktarten(k.V).map(p => `<tr><td>${esc(p.art)}</td><td>${p.n}</td><td>${eur(p.u)}</td><td>${eur(r2(p.u / p.n))}</td>
+        <td>${p.ok ? eur(p.g) + (p.ok < p.n ? ` <span class="chip gelb">${p.n - p.ok} offen</span>` : '') : '–'}</td>
+        <td>${p.ok && p.uOk ? Math.round(p.g / p.uOk * 100) + ' %' : '–'}</td></tr>`).join('')}
+    </table></div>
+    <p class="leise klein">Marge nur aus Verkäufen mit Einkaufspreis. Je mehr Einkäufe zugeordnet sind, desto genauer.</p>
 
 
     <h2>Fürs Finanzamt: Einnahmen-Überschuss-Rechnung ${j}</h2>
@@ -701,14 +804,21 @@ function seiteBerichte() {
     <div class="hinweis klein">Kleinunternehmer (§19 UStG): keine Umsatzsteuer. Wareneinkauf zählt im Jahr der Zahlung.
       ${j === 2026 ? `<br>2026: Einkäufe vor dem ${dt(S.d.buchAb)} fehlen noch, solange sie nicht nachgetragen sind – das Ergebnis ist dann zu hoch.` : ''}
       <br>Vorbereitung für die Steuererklärung (Anlage EÜR) – ersetzt keine Steuerberatung.</div>
+    <div class="karte keindruck" style="margin-top:14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px"><b>📦 Jahresabschluss-Paket ${j}</b>
+        <div class="klein leise">Eine ZIP-Datei mit EÜR, Verkäufen, Einkäufen, Ausgaben, Bestandsliste und allen Belegen – für ELSTER oder Steuerberater.</div></div>
+      <button class="knopf" id="xJ">Paket erstellen</button>
+    </div>
     <div class="knopfleiste keindruck">
-      <button class="knopf" id="xV">Verkäufe als CSV</button>
+      <button class="knopf zwei" id="xV">Verkäufe als CSV</button>
       <button class="knopf zwei" id="xE">Einkäufe als CSV</button>
       <button class="knopf zwei" id="xA">Ausgaben als CSV</button>
       <button class="knopf zwei" id="xU">EÜR als CSV</button>
       <button class="knopf zwei" onclick="window.print()">Drucken / PDF</button>
     </div>`;
   document.querySelectorAll('[data-jahr]').forEach(b => b.onclick = () => { S.jahr = Number(b.dataset.jahr); seiteBerichte(); });
+  document.querySelectorAll('[data-mk]').forEach(r => r.onclick = () => auswertung({ jahr: j, monate: [r.dataset.mk] }));
+  document.querySelectorAll('[data-konto]').forEach(z => z.onclick = () => auswertung({ jahr: j, monate: [], konto: z.dataset.konto }));
   dia.verbinden();
   const jahrFilter = x => x.datum && x.datum.getFullYear() === j;
   const z = n => (n === null || n === undefined) ? '' : String(n).replace('.', ',');
@@ -720,11 +830,44 @@ function seiteBerichte() {
     S.d.A.filter(jahrFilter).sort((a, b) => a.datum - b.datum).map(a => [a.nr, dt(a.datum), a.kategorie, a.beschreibung, a.haendler, z(a.betrag), a.zahlungsart, a.beleg, a.status]));
   $('#xU').onclick = () => csv('EUER_' + j, ['Posten', 'Betrag'], [['Betriebseinnahmen', z(e.einnahmen)], ['Wareneinkauf', z(-e.ware)], ['Verkaufsgebühren', z(-e.gebuehren)],
     ['Porto / Versandetiketten', z(-e.porto)]].concat(Object.entries(e.sonst).map(([kat, b]) => [kat, z(-r2(b))]), [['Ergebnis', z(e.ergebnis)]]));
+  $('#xJ').onclick = async () => {
+    const btn = $('#xJ'); btn.disabled = true; btn.textContent = 'Erstelle … (bis 1 Min.)';
+    const neu = (name, kopf, zeilen) => ({ name, text: csvText(kopf, zeilen) });
+    const fang = [];
+    window.__sammeln = (name, kopf, zeilen) => fang.push(neu(name + '.csv', kopf, zeilen));
+    ['#xV', '#xE', '#xA', '#xU'].forEach(s => $(s).onclick());
+    window.__sammeln = null;
+    fang.push(neu('Bestand_Stand_' + iso() + '.csv', ['Artikel-ID', 'Beleg-Nr', 'Kaufdatum', 'Produkt', 'Menge', 'Rest', 'EK/Stück', 'Restwert EK', 'Marktwert/Stück', 'Status'],
+      S.d.B.filter(b => b.rest > 0 && !['Storniert', 'Privat'].includes(b.status)).map(b => [b.id, b.nr, dt(b.datum), b.produkt, b.menge, b.rest, z(b.ekStueck), z(r2(b.rest * b.ekStueck)), z(marktwertVon(b)), b.status])));
+    try {
+      const r = await api('jahresabschluss', { jahr: j, dateien: fang });
+      const g = r.ergebnis;
+      dialog(`<h2 style="margin-top:0">📦 Jahresabschluss ${j} fertig</h2>
+        <p>${g.dateien} Dateien in einer ZIP – davon ${g.belege} Belege${g.fehlend ? ` (${g.fehlend} Belege nicht gefunden)` : ''}.</p>
+        <p class="klein leise">Liegt in Google Drive im Ordner „Buchhaltung – Belege/${j}“.</p>
+        <div class="knopfleiste"><a class="knopf" href="${esc(g.link)}" target="_blank" rel="noopener">In Drive öffnen / herunterladen</a>
+        <button class="knopf zwei" onclick="dialogZu()">Schließen</button></div>`);
+    } catch (e) { toast('Fehler: ' + e.message); }
+    btn.disabled = false; btn.textContent = 'Paket erstellen';
+  };
+}
+
+// Nach Produktart (aus dem Verkaufstitel erkannt)
+function produktarten(V) {
+  const g = {};
+  V.forEach(v => { const a = produktart(v.artikel); const p = g[a] || (g[a] = { art: a, n: 0, u: 0, g: 0, ok: 0, uOk: 0 });
+    p.n++; p.u += umsatzVon(v); if (v.gewinn !== null) { p.ok++; p.g += v.gewinn; p.uOk += umsatzVon(v); } });
+  return Object.values(g).map(p => Object.assign(p, { u: r2(p.u), g: r2(p.g) })).sort((a, b) => b.u - a.u);
+}
+
+function csvText(kopf, zeilen) {
+  const zelle = x => { const s = String(x === null || x === undefined ? '' : x); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  return [kopf].concat(zeilen).map(r => r.map(zelle).join(';')).join('\r\n');
 }
 
 function csv(name, kopf, zeilen) {
-  const zelle = x => { const s = String(x === null || x === undefined ? '' : x); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const text = '﻿' + [kopf].concat(zeilen).map(r => r.map(zelle).join(';')).join('\r\n');
+  if (window.__sammeln) return window.__sammeln(name, kopf, zeilen);
+  const text = '﻿' + csvText(kopf, zeilen);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
   a.download = name + '.csv';
@@ -732,6 +875,174 @@ function csv(name, kopf, zeilen) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+// ---------- Hilfen: Marktwert, Ladenhüter, Produktart ----------
+const LADENHUETER_TAGE = 45;
+const marktwertVon = b => {
+  if (b.marktwert) return b.marktwert;
+  const m = String(b.details || '').match(/Marktpreis[^:]*:\s*([\d.,]+)/);
+  return m ? zahlEin(m[1]) : null;
+};
+const tageIm = b => b.datum ? Math.floor((Date.now() - b.datum) / 864e5) : 0;
+const ladenhueter = () => imBestand().filter(b => tageIm(b) > LADENHUETER_TAGE).sort((a, b) => tageIm(b) - tageIm(a));
+function produktart(titel) {
+  const t = String(titel).toLowerCase();
+  if (/display|booster ?box|boosterbox|36 booster|surprise box/.test(t)) return 'Display / Booster-Box';
+  if (/elite trainer|top.?trainer|\betb\b/.test(t)) return 'Top-Trainer-Box';
+  if (/bundle/.test(t)) return 'Booster-Bundle';
+  if (/kollektion|collection|tin\b|blister|premium/.test(t)) return 'Kollektion / Tin';
+  if (/booster|pack/.test(t)) return 'Booster';
+  if (/\) - [^-]+ - (german|english|japanese|deutsch|englisch|japanisch|french|italian|spanish|korean|s-chinese|t-chinese)/.test(t) || /- (nm|ex|gd|lp|mt)\b/.test(t)) return 'Einzelkarte';
+  if (/tonie|controller|lego|blind box|figur|spielzeug|legami/.test(t)) return 'Sonstige Ware';
+  return 'Sonstiges';
+}
+
+// ---------- Auswertung: Jahr + frei wählbare Monate (+ optional Konto) ----------
+function auswertung(opts) { S.aus = Object.assign({ jahr: new Date().getFullYear(), monate: [], konto: '' }, opts || {}); geheZu('auswertung'); }
+window.auswertung = auswertung;
+
+function seiteAuswertung() {
+  const a = S.aus || (S.aus = { jahr: new Date().getFullYear(), monate: [], konto: '' });
+  const jahre = [...new Set(S.d.V.map(v => v.datum.getFullYear()).concat([new Date().getFullYear()]))].sort().reverse();
+  const keys = MONATE_KURZ.map((m, i) => a.jahr + '-' + String(i + 1).padStart(2, '0'));
+  const sel = a.monate.length ? a.monate : keys;
+  const VJ = S.d.V.filter(v => aktiv(v) && v.datum.getFullYear() === a.jahr && sel.includes(v.monat));
+  const V = VJ.filter(v => !a.konto || kontoName(v) === a.konto).sort((x, y) => y.datum - x.datum);
+  const summe = f => r2(V.reduce((s, v) => s + (f(v) || 0), 0));
+  const umsatz = summe(umsatzVon), gewinn = summe(v => v.gewinn), geb = summe(v => v.gebuehren), porto = summe(v => v.porto);
+  const offen = V.filter(v => v.gewinn === null).length, mitEk = V.length - offen;
+  const umsatzMitEk = r2(V.filter(v => v.gewinn !== null).reduce((s, v) => s + umsatzVon(v), 0));
+  const titel = (a.monate.length === 0 ? 'Ganzes Jahr ' + a.jahr : a.monate.length === 1 ? monatName(a.monate[0]) : a.monate.length + ' Monate ' + a.jahr) + (a.konto ? ' · ' + a.konto : '');
+  const dia = sel.length === 1 && a.monate.length === 1 ? tagesDiagramm(a.monate[0]) : monatsDiagramm(a.jahr, a.monate);
+  const top = {};
+  V.forEach(v => { const k = String(v.artikel).replace(/^\d+x /, '').slice(0, 70); const t = top[k] || (top[k] = { n: 0, u: 0, g: 0, ok: 0 }); t.n++; t.u += umsatzVon(v); if (v.gewinn !== null) { t.g += v.gewinn; t.ok++; } });
+  const topL = Object.entries(top).sort((x, y) => y[1].u - x[1].u).slice(0, 5);
+  inhalt().innerHTML = `
+    <h1>Auswertung</h1>
+    <div class="filter keindruck"><div class="segment">${jahre.map(x => `<button data-j="${x}" class="${x === a.jahr ? 'aktiv' : ''}">${x}</button>`).join('')}</div></div>
+    <div class="monatswahl keindruck">
+      <button data-m="" class="${a.monate.length ? '' : 'aktiv'}">Ganzes Jahr</button>
+      ${keys.map((k, i) => { const hat = S.d.V.some(v => v.monat === k && aktiv(v)); return `<button data-m="${k}" class="${a.monate.includes(k) ? 'aktiv' : ''} ${hat ? '' : 'leer'}">${MONATE_KURZ[i]}</button>`; }).join('')}
+    </div>
+    <p class="leise klein" style="margin:-4px 0 12px">Tippe mehrere Monate an, um sie zusammenzurechnen.${a.konto ? ` Filter: <b>${esc(a.konto)}</b> <a href="#" id="kontoWeg">✕ aufheben</a>` : ''}</p>
+    <div class="hero" style="padding:18px 20px">
+      <div class="label">${esc(titel)}</div>
+      <div class="gross" style="font-size:34px">${eur(umsatz)}</div>
+      <div class="reihe-h">
+        <div class="pille"><div class="k">Gewinn (${mitEk} von ${V.length} mit EK)</div><div class="w">${eur(gewinn)}</div></div>
+        <div class="pille"><div class="k">Marge</div><div class="w">${umsatzMitEk ? Math.round(gewinn / umsatzMitEk * 100) + ' %' : '–'}</div></div>
+        <div class="pille"><div class="k">Verkäufe</div><div class="w">${V.length}</div></div>
+      </div>
+    </div>
+    <div class="kacheln">
+      <div class="kachel"><div class="ic">💸</div><div class="wert">${eur(geb)}</div><div class="text">Gebühren (${umsatz ? Math.round(geb / umsatz * 100) : 0} %)</div></div>
+      <div class="kachel"><div class="ic">✉</div><div class="wert">${eur(porto)}</div><div class="text">Porto / Etiketten</div></div>
+      <div class="kachel"><div class="ic">🧮</div><div class="wert">${V.length ? eur(r2(umsatz / V.length)) : '–'}</div><div class="text">Ø pro Verkauf</div></div>
+      <div class="kachel klickbar ${offen ? 'warnung' : ''}" onclick="filterSetzen('ekfehlt')"><div class="ic">🧾</div><div class="wert">${offen}</div><div class="text">ohne Einkaufspreis ›</div></div>
+    </div>
+    <div class="raster zwei">
+      <div class="karte"><div class="karte-kopf"><h3>${sel.length === 1 && a.monate.length === 1 ? 'Umsatz pro Tag' : 'Umsatz pro Monat'}</h3><span class="leise klein">Säule antippen = Monat öffnen</span></div>${dia.html}</div>
+      <div class="karte"><div class="karte-kopf"><h3>Nach Konto</h3><span class="leise klein">antippen = filtern</span></div>${kontoBalken(VJ, a.konto)}</div>
+    </div>
+    ${topL.length ? `<h2>Top-Artikel</h2><div class="karte tabelle-scroll"><table><tr><th>Artikel</th><th>Stk</th><th>Umsatz</th><th>Gewinn</th></tr>
+      ${topL.map(([k, t]) => `<tr><td style="white-space:normal">${esc(k)}</td><td>${t.n}</td><td>${eur(r2(t.u))}</td><td>${t.ok ? eur(r2(t.g)) : '–'}</td></tr>`).join('')}</table></div>` : ''}
+    <h2>Verkäufe (${V.length})</h2>
+    <div class="liste">${V.slice(0, 150).map(zeileVerkauf).join('') || '<div class="leer">Keine Verkäufe in dieser Auswahl.</div>'}</div>`;
+  document.querySelectorAll('[data-j]').forEach(b => b.onclick = () => { a.jahr = Number(b.dataset.j); a.monate = []; seiteAuswertung(); });
+  document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+    const k = b.dataset.m;
+    if (!k) a.monate = []; else a.monate = a.monate.includes(k) ? a.monate.filter(x => x !== k) : a.monate.concat(k).sort();
+    seiteAuswertung();
+  });
+  document.querySelectorAll('[data-konto]').forEach(z => z.onclick = () => { a.konto = a.konto === z.dataset.konto ? '' : z.dataset.konto; seiteAuswertung(); });
+  const kw = $('#kontoWeg'); if (kw) kw.onclick = e => { e.preventDefault(); a.konto = ''; seiteAuswertung(); };
+  dia.verbinden();
+  aktionenVerbinden();
+}
+
+// ---------- Verkauf im Detail ----------
+function bestellLink(v) {
+  return v.plattform === 'Cardmarket' ? 'https://www.cardmarket.com/de/Pokemon/Orders/' + encodeURIComponent(v.bestellnr)
+    : 'https://www.ebay.de/mesh/ord/details?orderid=' + encodeURIComponent(v.bestellnr);
+}
+function verkaufDialog(id) {
+  const v = S.d.V.find(x => x.id === id);
+  if (!v) return;
+  const z = S.d.Z.filter(x => x.verkaufId === id && x.menge > 0);
+  const zeile = (k, w, extra) => `<tr><td>${k}</td><td>${w}${extra || ''}</td></tr>`;
+  dialog(`<div style="display:flex;gap:12px;align-items:center"><div class="avatar ${v.plattform === 'Cardmarket' ? 'av-cm' : 'av-eb'}" style="grid-row:auto">${v.plattform === 'Cardmarket' ? 'CM' : 'eB'}</div>
+      <div><b>${esc(v.artikel)}</b><div class="klein leise">${dt(v.datum)} · ${esc(kontoName(v))} · Käufer ${esc(v.kaeufer)}</div></div></div>
+    <div class="tabelle-scroll" style="margin-top:12px"><table>
+      ${zeile('Verkaufspreis', eur(v.vk))}${zeile('+ Versand vom Käufer', eur(v.versand))}
+      ${v.erstattet ? zeile('− Erstattet', eur(v.erstattet)) : ''}
+      ${zeile('− Gebühren', eur(v.gebuehren))}${zeile('− Porto / Etikett', eur(v.porto))}
+      ${zeile('− Einkaufspreis', eur(v.ek), v.ekQuelle ? ` <span class="chip">${esc(v.ekQuelle)}</span>` : '')}
+      <tr class="gesamt"><td>Gewinn</td><td class="${v.gewinn === null ? '' : v.gewinn >= 0 ? 'plus' : 'minus'}">${v.gewinn !== null ? eur(v.gewinn) : `<span class="chip gelb">${esc(v.gewinnText || 'offen')}</span>`}</td></tr>
+    </table></div>
+    ${z.length ? `<div class="klein" style="margin-top:8px">Aus Bestand: ${z.map(x => x.menge + '× ' + esc(x.artikelId)).join(', ')}</div>` : ''}
+    <div class="klein" style="margin-top:8px">Status: <span class="chip">${esc(v.status)}</span> · Bestellnr. ${esc(v.bestellnr)}
+      ${v.sendung ? ` · <a href="${trackingUrl(v.sendung, v.versender)}" target="_blank" rel="noopener">📦 Sendung verfolgen</a>` : ''}</div>
+    <div class="knopfleiste">
+      ${aktiv(v) ? `<button class="knopf" id="vdZu">${v.ek === null ? 'Einkauf zuordnen' : 'EK ändern'}</button>
+        <button class="knopf zwei" id="vdPorto">Porto ${v.porto === null ? 'eintragen' : 'ändern'}</button>` : ''}
+      <a class="knopf zwei" href="${bestellLink(v)}" target="_blank" rel="noopener">Bestellung öffnen</a>
+      <button class="knopf zwei" onclick="dialogZu()">Schließen</button></div>`, box => {
+    const zu = $('#vdZu', box); if (zu) zu.onclick = () => zuordnenDialog(id);
+    const po = $('#vdPorto', box); if (po) po.onclick = () => { dialogZu(); portoDialog(id); };
+  });
+}
+
+// ---------- Bestellungen: abends abarbeiten (versenden + Etiketten drucken) ----------
+// Nur Bestellungen der letzten 3 Wochen gelten als „offen“; ältere ohne Versand-Mail landen in „vermutlich versendet“.
+const PAKET_TAGE = 21;
+const versandOffen = v => aktiv(v) && /versenden|^Bezahlt$|Teilweise/.test(v.status);
+const zuVersenden = () => S.d.V.filter(v => versandOffen(v) && tageIm(v) <= PAKET_TAGE).sort((a, b) => a.datum - b.datum);
+const versandUnklar = () => S.d.V.filter(v => versandOffen(v) && tageIm(v) > PAKET_TAGE).sort((a, b) => b.datum - a.datum);
+function erledigtListe() { try { return JSON.parse(localStorage.getItem('rb_erledigt') || '{}'); } catch (e) { return {}; } }
+function erledigtSetzen(id, an) {
+  const e = erledigtListe(); if (an) e[id] = Date.now(); else delete e[id];
+  try { localStorage.setItem('rb_erledigt', JSON.stringify(e)); } catch (x) { /* egal */ }
+}
+
+function seiteVersand() {
+  const L = zuVersenden(), erl = erledigtListe(), alt = versandUnklar();
+  const offen = L.filter(v => !erl[v.id]), fertig = L.filter(v => erl[v.id]);
+  const gruppe = (titel, liste) => liste.length ? `<h2>${titel} <span class="chip">${liste.length}</span></h2>
+    <div class="liste">${liste.map(v => `<div class="eintrag versand ${erl[v.id] ? 'fertig' : ''}">
+      <label class="haken"><input type="checkbox" data-erl="${esc(v.id)}" ${erl[v.id] ? 'checked' : ''}><span></span></label>
+      <div class="haupt" title="${esc(v.artikel)}">${esc(v.artikel)}</div><div class="rechts">${eur(umsatzVon(v))}</div>
+      <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span><span>an <b>${esc(v.kaeufer)}</b></span>
+        <span class="chip ${Date.now() - v.datum > 2 * 864e5 ? 'gelb' : ''}">seit ${Math.max(0, Math.floor((Date.now() - v.datum) / 864e5))} Tagen</span>
+        <a href="${bestellLink(v)}" target="_blank" rel="noopener">Bestellung öffnen ›</a></div></div>`).join('')}</div>` : '';
+  const cm = offen.filter(v => v.plattform === 'Cardmarket'), eb = offen.filter(v => v.plattform !== 'Cardmarket');
+  inhalt().innerHTML = `
+    <h1>Bestellungen</h1>
+    <div class="hero" style="padding:18px 20px">
+      <div class="label">Heute zu erledigen</div>
+      <div class="gross" style="font-size:34px">${offen.length} ${offen.length === 1 ? 'Paket' : 'Pakete'}</div>
+      <div class="reihe-h">
+        <div class="pille"><div class="k">Cardmarket</div><div class="w">${cm.length}</div></div>
+        <div class="pille"><div class="k">eBay</div><div class="w">${eb.length}</div></div>
+        <div class="pille"><div class="k">Erledigt</div><div class="w">${fertig.length}</div></div>
+      </div>
+    </div>
+    <div class="schnell keindruck">
+      <a class="schnellknopf" href="etikettdruck://start" id="btnDruck"><b>🖨 Etiketten drucken</b><span>öffnet deine Drucker-App</span></a>
+      <a class="schnellknopf" href="https://www.ebay.de/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener"><b>🏷 eBay-Etiketten kaufen</b><span>eBay Verkäufer-Cockpit</span></a>
+    </div>
+    <p class="leise klein">Ablauf: Etiketten kaufen und herunterladen → „Etiketten drucken“ → Paket packen → abhaken. Abgehakte Pakete verschwinden, sobald die Plattform „versendet“ meldet.</p>
+    ${offen.length ? '' : '<div class="karte leer">🎉 Alles versendet – nichts offen.</div>'}
+    ${gruppe('Cardmarket', cm)}${gruppe('eBay', eb)}${gruppe('Abgehakt', fertig)}
+    ${alt.length ? `<details class="karte" style="margin-top:16px"><summary style="cursor:pointer"><b>Älter als ${PAKET_TAGE} Tage – vermutlich schon versendet</b>
+      <span class="chip">${alt.filter(v => !erl[v.id]).length}</span>
+      <div class="klein leise">Dafür kam keine Versand-Mail an. Bitte kurz prüfen und abhaken.</div></summary>${gruppe('', alt).replace(/^<h2>.*?<\/h2>/s, '')}</details>` : ''}`;
+  document.querySelectorAll('[data-erl]').forEach(c => c.onchange = () => {
+    const auf = !!c.closest('details')?.open, y = window.scrollY;
+    erledigtSetzen(c.dataset.erl, c.checked); zeichnen();
+    if (auf) { const d = document.querySelector('main details'); if (d) d.open = true; }
+    window.scrollTo(0, y);
+  });
+  $('#btnDruck').onclick = () => setTimeout(() => { if (document.hasFocus()) toast('Falls sich nichts öffnet: einmal „app-verknuepfen.ps1“ im Ordner Etikett-Drucker ausführen.'); }, 2500);
+}
 // ---------- Start ----------
 function geheZu(seite) { S.seite = seite; zeichnen(); }
 window.geheZu = geheZu; window.dialogZu = dialogZu; window.ausgabeDialog = ausgabeDialog;
