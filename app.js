@@ -447,8 +447,8 @@ function positionHtml(i) {
 function seiteEinkauf() {
   const E = S.d.E.slice().sort((a, b) => b.datum - a.datum);
   inhalt().innerHTML = `
-    <h1>Einkauf erfassen</h1>
-    <div class="karte">
+    <h1 id="eTitel">Einkauf erfassen</h1>
+    <div class="karte" id="eForm">
       <div class="reihe">
         <div><label>Datum</label><input id="eDatum" type="date" value="${iso()}"></div>
         <div><label>Zahlungsart</label><select id="eZahl">${ZAHLUNG.map(z => `<option>${z}</option>`).join('')}</select></div>
@@ -597,14 +597,15 @@ function seiteAusgaben() {
       ${a.status === 'Storniert' ? '<span class="chip rot">Storniert</span>' : ''}</div></div>`).join('') || '<div class="leer">Noch keine Ausgaben.</div>'}</div>`;
 }
 
-function ausgabeDialog() {
+function ausgabeDialog(vor) {
+  vor = vor || {};
   const kat = S.d.e.ausgabeKategorien || ['Versandmaterial', 'Sonstiges'];
   dialog(`<h2 style="margin-top:0">Ausgabe erfassen</h2>
-    <div class="reihe"><div><label>Datum</label><input id="aDat" type="date" value="${iso()}"></div>
-      <div><label>Betrag €</label><input id="aBet" inputmode="decimal" placeholder="0,00"></div></div>
-    <label>Kategorie</label><select id="aKat">${kat.map(k => `<option>${k}</option>`).join('')}</select>
-    <label>Beschreibung</label><input id="aBes" placeholder="z. B. 100 Luftpolsterumschläge">
-    <div class="reihe"><div><label>Händler</label><input id="aHae"></div>
+    <div class="reihe"><div><label>Datum</label><input id="aDat" type="date" value="${vor.datum || iso()}"></div>
+      <div><label>Betrag €</label><input id="aBet" inputmode="decimal" placeholder="0,00" value="${vor.betrag !== null && vor.betrag !== undefined ? String(vor.betrag).replace('.', ',') : ''}"></div></div>
+    <label>Kategorie</label><select id="aKat">${kat.map(k => `<option ${k === vor.kategorie ? 'selected' : ''}>${k}</option>`).join('')}</select>
+    <label>Beschreibung</label><input id="aBes" placeholder="z. B. 100 Luftpolsterumschläge" value="${esc(vor.beschreibung || '')}">
+    <div class="reihe"><div><label>Händler</label><input id="aHae" value="${esc(vor.haendler || '')}"></div>
       <div><label>Zahlungsart</label><select id="aZahl">${ZAHLUNG.map(z => `<option>${z}</option>`).join('')}</select></div></div>
     <label>Beleg (Foto oder PDF)</label><input id="aBel" type="file" accept="image/*,application/pdf">
     <div class="knopfleiste"><button class="knopf" id="aSp">Speichern</button><button class="knopf zwei" onclick="dialogZu()">Abbrechen</button></div>`,
