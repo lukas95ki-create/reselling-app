@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Reselling-Buch</title>
+  <meta name="description" content="Einkauf, Bestand, Verkauf und Buchhaltung">
+  <meta name="theme-color" content="#1f3a5f">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="kopf">
+    <div class="titel">Reselling-Buch</div>
+    <div class="stand" id="stand"></div>
+    <button id="btnSync" class="knopf-icon" title="Neu laden" aria-label="Neu laden">⟳</button>
+  </header>
+  <nav class="nav" id="nav">
+    <button data-seite="start" class="aktiv"><span class="ic">🏠</span><span>Start</span></button>
+    <button data-seite="verkaeufe"><span class="ic">💶</span><span>Verkäufe</span></button>
+    <button data-seite="einkauf"><span class="ic">🛒</span><span>Einkauf</span></button>
+    <button data-seite="bestand"><span class="ic">📦</span><span>Bestand</span></button>
+    <button data-seite="ausgaben"><span class="ic">🧾</span><span>Ausgaben</span></button>
+    <button data-seite="berichte"><span class="ic">📊</span><span>Berichte</span></button>
+  </nav>
+  <main id="inhalt"><div class="laden">Lade …</div></main>
+  <div id="dialog" class="dialog" hidden><div class="dialog-box" id="dialogBox"></div></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
