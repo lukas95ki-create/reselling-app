@@ -2,6 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
+const APP_VERSION = '5';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -139,7 +140,7 @@ function dialogZu() { $('#dialog').hidden = true; $('#dialogBox').innerHTML = ''
 // ---------- Navigation ----------
 function zeichnen() {
   if (!S.d) return;
-  $('#stand').textContent = S.d.e.letzteAktualisierung ? 'Stand ' + new Date(S.d.e.letzteAktualisierung).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  $('#stand').textContent = (S.d.e.letzteAktualisierung ? 'Stand ' + new Date(S.d.e.letzteAktualisierung).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' · ' : '') + 'App v' + APP_VERSION;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('aktiv', b.dataset.seite === S.seite));
   const erl = erledigtListe(), pakete = zuVersenden().filter(v => !erl[v.id]).length;
   $('#navPakete').hidden = !pakete; $('#navPakete').textContent = pakete;
@@ -1054,7 +1055,25 @@ $('#btnSync').onclick = async () => {
   try { await api('aktualisieren'); toast('Neue Verkäufe abgerufen'); } catch (e) { toast('Abruf: ' + e.message); }
   await laden(true);
 };
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+// Selbst-Update: beim Öffnen/Zurückkehren nach neuer Version schauen und dann neu laden
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const hatteSW = !!navigator.serviceWorker.controller;
+  let updateBereit = false;
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const pruefen = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (updateBereit) location.reload(); else pruefen();
+    });
+    setInterval(pruefen, 30 * 60 * 1000);
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hatteSW || updateBereit) return;
+    // Nicht mitten in einer Eingabe neu laden
+    if (!$('#dialog').hidden || ['einkauf', 'ausgaben'].includes(S.seite)) { updateBereit = true; toast('Neue App-Version – wird beim nächsten Öffnen geladen.'); }
+    else location.reload();
+  });
+}
 
 cfgLaden();
 if (!S.cfg) einrichtungZeigen();
