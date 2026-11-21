@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -1044,7 +1044,10 @@ function seiteVersand() {
     window.scrollTo(0, y);
   });
   if (istHandy) { $('#btnHandyDruck').onclick = etikettenWaehlen; return; }
-  $('#btnDruck').onclick = () => setTimeout(() => { if (document.hasFocus()) toast('Falls sich nichts öffnet: einmal „app-verknuepfen.ps1“ im Ordner Etikett-Drucker ausführen.'); }, 2500);
+  $('#btnDruck').onclick = () => {
+    toast('Drucker-App wird geöffnet … (lädt ein paar Sekunden)');
+    setTimeout(() => { if (document.hasFocus()) toast('Kein Fenster zu sehen? Unten in der Taskleiste auf „Etiketten drucken“ klicken.'); }, 9000);
+  };
 }
 // ---------- Etiketten am Handy: zuschneiden wie die PC-Drucker-App, dann an „Brother iPrint&Label“ geben ----------
 const ET_DPMM = 300 / 25.4;               // Brother QL-820NWB: 300 Punkte pro Zoll
