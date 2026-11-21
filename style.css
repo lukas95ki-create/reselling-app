@@ -224,6 +224,15 @@ tr.klickbar:hover td { background: var(--flaeche-2); }
   text-decoration: none; color: var(--text); box-shadow: var(--schatten); }
 .schnellknopf:first-child { background: linear-gradient(135deg, var(--hero-2), var(--akzent)); border-color: transparent; color: #fff; }
 .schnell .schnellknopf:first-child span { color: rgba(255,255,255,.85); }
+button.schnellknopf { font: inherit; text-align: left; cursor: pointer; width: 100%; }
+.et-liste { display: grid; gap: 10px; margin-top: 12px; }
+.et-karte { display: grid; grid-template-columns: 104px 1fr; gap: 12px; align-items: center; padding: 10px;
+  border: 1px solid var(--linie); border-radius: 14px; background: var(--flaeche-2); }
+.et-karte.fertig { opacity: .65; }
+.et-bild { width: 104px; max-height: 170px; object-fit: contain; background: #fff; border: 1px solid var(--linie); border-radius: 6px; }
+div.et-bild { height: 120px; display: grid; place-items: center; color: var(--leise); }
+.et-info { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.et-info b { overflow-wrap: anywhere; }
 .nav button { position: relative; }
 .nav .zahl { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--krit); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }

@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '5';
+const APP_VERSION = '6';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -1027,10 +1027,11 @@ function seiteVersand() {
       </div>
     </div>
     <div class="schnell keindruck">
-      <a class="schnellknopf" href="etikettdruck://start" id="btnDruck"><b>🖨 Etiketten drucken</b><span>öffnet deine Drucker-App</span></a>
+      ${istHandy ? '<button type="button" class="schnellknopf" id="btnHandyDruck"><b>🖨 Etikett drucken</b><span>Datei wählen → Brother-App</span></button>'
+        : '<a class="schnellknopf" href="etikettdruck://start" id="btnDruck"><b>🖨 Etiketten drucken</b><span>öffnet deine Drucker-App</span></a>'}
       <a class="schnellknopf" href="https://www.ebay.de/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener"><b>🏷 eBay-Etiketten kaufen</b><span>eBay Verkäufer-Cockpit</span></a>
     </div>
-    <p class="leise klein">Ablauf: Etiketten kaufen und herunterladen → „Etiketten drucken“ → Paket packen → abhaken. Abgehakte Pakete verschwinden, sobald die Plattform „versendet“ meldet.</p>
+    <p class="leise klein">Ablauf: Etikett kaufen und herunterladen → ${istHandy ? '„Etikett drucken“ → Datei wählen → an iPrint&amp;Label senden' : '„Etiketten drucken“'} → Paket packen → abhaken. Abgehakte Pakete verschwinden, sobald die Plattform „versendet“ meldet.</p>
     ${offen.length ? '' : '<div class="karte leer">🎉 Alles versendet – nichts offen.</div>'}
     ${gruppe('Cardmarket', cm)}${gruppe('eBay', eb)}${gruppe('Abgehakt', fertig)}
     ${alt.length ? `<details class="karte" style="margin-top:16px"><summary style="cursor:pointer"><b>Älter als ${PAKET_TAGE} Tage – vermutlich schon versendet</b>
@@ -1042,8 +1043,159 @@ function seiteVersand() {
     if (auf) { const d = document.querySelector('main details'); if (d) d.open = true; }
     window.scrollTo(0, y);
   });
+  if (istHandy) { $('#btnHandyDruck').onclick = etikettenWaehlen; return; }
   $('#btnDruck').onclick = () => setTimeout(() => { if (document.hasFocus()) toast('Falls sich nichts öffnet: einmal „app-verknuepfen.ps1“ im Ordner Etikett-Drucker ausführen.'); }, 2500);
 }
+// ---------- Etiketten am Handy: zuschneiden wie die PC-Drucker-App, dann an „Brother iPrint&Label“ geben ----------
+const ET_DPMM = 300 / 25.4;               // Brother QL-820NWB: 300 Punkte pro Zoll
+const ET_BREITE = 696, ET_HOEHE = 1109;   // bedruckbare Fläche 62 × 100 mm in Druckerpunkten
+const istHandy = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+let pdfjsVersprechen = null;
+
+function pdfjsLaden() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!pdfjsVersprechen) pdfjsVersprechen = new Promise((ok, nein) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; ok(window.pdfjsLib); };
+    s.onerror = () => { pdfjsVersprechen = null; nein(new Error('PDF-Leser nicht geladen – Internet an?')); };
+    document.head.appendChild(s);
+  });
+  return pdfjsVersprechen;
+}
+
+// Ganze Etikett-Seite als Bild (A4-Breite 2480 Punkte = 300 dpi, wie am PC)
+async function etikettSeite(datei) {
+  const c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
+  if (datei.type === 'application/pdf' || /\.pdf$/i.test(datei.name)) {
+    const lib = await pdfjsLaden();
+    const doc = await lib.getDocument({ data: await datei.arrayBuffer() }).promise;
+    const seite = await doc.getPage(1);
+    const vp = seite.getViewport({ scale: 2480 / seite.getViewport({ scale: 1 }).width });
+    c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    await seite.render({ canvasContext: g, viewport: vp }).promise;
+    doc.destroy();
+  } else {
+    const bild = await createImageBitmap(datei);
+    c.width = bild.width; c.height = bild.height;
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bild, 0, 0);
+    if (bild.close) bild.close();
+  }
+  return c;
+}
+
+// Umriss aller dunklen Pixel im Bereich; „ecke“ = Eck-Quadrate (Schnittmarken) auslassen
+function dunkleBox(px, W, l, t, r, b, ecke) {
+  let x0 = r, y0 = b, x1 = -1, y1 = -1;
+  for (let y = t; y < b; y++) {
+    const randY = ecke && (y < t + ecke || y >= b - ecke);
+    for (let x = l; x < r; x++) {
+      if (randY && (x < l + ecke || x >= r - ecke)) continue;
+      const i = (y * W + x) * 4;
+      if (px[i] + px[i + 1] + px[i + 2] < 450) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+  }
+  return x1 < 0 ? null : { l: x0, t: y0, r: x1 + 1, b: y1 + 1 };
+}
+
+// Etikett finden: sitzt oben links auf der Seite (obere 47 %), dazu 1 mm Rand; „innen“ = ohne Schnittmarken
+function etikettZuschnitt(seite) {
+  const W = seite.width, H = seite.height, px = seite.getContext('2d').getImageData(0, 0, W, H).data;
+  const proMm = W / 210, pad = Math.round(proMm);
+  const box = dunkleBox(px, W, 0, 0, W, Math.floor(H * 0.47), 0);
+  if (!box) throw new Error('Kein Etikett auf der Seite gefunden');
+  const aussen = { l: Math.max(0, box.l - pad), t: Math.max(0, box.t - pad), r: Math.min(W, box.r + pad), b: Math.min(H, box.b + pad) };
+  const i0 = dunkleBox(px, W, aussen.l, aussen.t, aussen.r, aussen.b, Math.round(7 * proMm)) || aussen;
+  const innen = { l: Math.max(aussen.l, i0.l - pad), t: Math.max(aussen.t, i0.t - pad), r: Math.min(aussen.r, i0.r + pad), b: Math.min(aussen.b, i0.b + pad) };
+  const gross = Math.min(aussen.r - aussen.l, aussen.b - aussen.t) / proMm > 70;   // z. B. DHL-Paketschein
+  return { seite, proMm, aussen, innen, gross };
+}
+
+// Druckbild: groß = hochkant auf 62 × 100 mm; klein = quer auf 62 mm Endlosrolle; reines Schwarz-Weiß
+function etikettBild(z, klein) {
+  const r = klein ? z.innen : z.aussen, ow = r.r - r.l, oh = r.b - r.t;
+  const drehen = klein ? oh > ow : ow > oh;
+  const wMm = (drehen ? oh : ow) / z.proMm, hMm = (drehen ? ow : oh) / z.proMm;
+  const endlos = klein || z.gross;
+  const s = endlos ? Math.min(1, 58 / wMm) : Math.min(1, 58 / wMm, 96 / hMm);
+  const bw = Math.round(wMm * s * ET_DPMM), bh = Math.round(hMm * s * ET_DPMM);
+  const c = document.createElement('canvas');
+  c.width = ET_BREITE; c.height = endlos ? Math.max(Math.round(29 * ET_DPMM), bh) : ET_HOEHE;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.translate(Math.round((c.width - bw) / 2), Math.round((c.height - bh) / 2));
+  if (drehen) { g.translate(bw, 0); g.rotate(Math.PI / 2); g.drawImage(z.seite, r.l, r.t, ow, oh, 0, 0, bh, bw); }
+  else g.drawImage(z.seite, r.l, r.t, ow, oh, 0, 0, bw, bh);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) { const v = p[i] + p[i + 1] + p[i + 2] < 480 ? 0 : 255; p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255; }
+  g.putImageData(d, 0, 0);
+  return new Promise(ok => c.toBlob(ok, 'image/png'));
+}
+
+function gedrucktListe() { try { return JSON.parse(localStorage.getItem('rb_gedruckt') || '{}'); } catch (e) { return {}; } }
+function gedrucktMerken(name) {
+  const g = gedrucktListe(); g[name] = Date.now();
+  Object.keys(g).forEach(k => { if (Date.now() - g[k] > 60 * 864e5) delete g[k]; });
+  try { localStorage.setItem('rb_gedruckt', JSON.stringify(g)); } catch (e) { /* egal */ }
+}
+
+function etikettenWaehlen() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'application/pdf,image/*'; inp.multiple = true;
+  inp.onchange = () => { if (inp.files.length) etikettenDialog([...inp.files]); };
+  inp.click();
+}
+
+async function etikettenDialog(dateien) {
+  const kleinStd = localStorage.getItem('rb_etikett') === 'klein';
+  const E = dateien.map((f, i) => ({ i, f, name: f.name.replace(/\.(pdf|png|jpe?g)$/i, '').replace(/ \(\d+\)$/, ''), klein: kleinStd, gross: false, bild: {}, url: {}, fehler: '' }));
+  dialog(`<h2 style="margin-top:0">🖨 Etiketten drucken</h2><p class="leise">Wird zugeschnitten …</p>`);
+  for (const e of E) {
+    try {
+      const z = etikettZuschnitt(await etikettSeite(e.f));
+      e.gross = z.gross; if (z.gross) e.klein = false;
+      for (const k of z.gross ? [false] : [false, true]) { const b = await etikettBild(z, k); e.bild[k] = b; e.url[k] = URL.createObjectURL(b); }
+      z.seite.width = 0; z.seite = null;   // Speicher frei machen
+    } catch (x) { e.fehler = x.message; }
+  }
+  const malen = () => {
+    const gedruckt = gedrucktListe(), ok = E.filter(e => !e.fehler);
+    $('#dialogBox').innerHTML = `<h2 style="margin-top:0">🖨 Etiketten drucken</h2>
+      <p class="klein leise">„An Drucker senden“ antippen und <b>iPrint&amp;Label</b> wählen. Rolle: <b>Groß</b> = 62 × 100-mm-Etiketten, <b>Klein</b> = 62-mm-Endlosrolle.</p>
+      <div class="et-liste">${E.map(e => `<div class="et-karte ${gedruckt[e.name] ? 'fertig' : ''}">
+        ${e.fehler ? '<div class="et-bild leer">?</div>' : `<img class="et-bild" src="${e.url[e.klein]}" alt="Vorschau">`}
+        <div class="et-info"><b>${esc(e.name.replace(/^eBay label\s*/i, ''))}</b>
+          ${e.fehler ? `<span class="chip rot">${esc(e.fehler)}</span>`
+            : e.gross ? '<span class="chip gelb">DHL-Paketschein – wird verkleinert, Endlosrolle nehmen</span>'
+            : `<div class="segment"><button data-et="${e.i}" data-k="0" class="${e.klein ? '' : 'aktiv'}">Groß (Paket)</button><button data-et="${e.i}" data-k="1" class="${e.klein ? 'aktiv' : ''}">Klein (Brief)</button></div>`}
+          ${gedruckt[e.name] ? '<span class="chip gruen">schon gesendet ✓</span>' : ''}
+          ${e.fehler ? '' : `<button class="knopf klein" data-send="${e.i}">An Drucker senden</button>`}
+        </div></div>`).join('')}</div>
+      <div class="knopfleiste">${ok.length > 1 ? `<button class="knopf" id="etAlle">Alle ${ok.length} senden</button>` : ''}<button class="knopf zwei" id="etZu">Fertig</button></div>`;
+    document.querySelectorAll('[data-et]').forEach(b => b.onclick = () => { E[b.dataset.et].klein = b.dataset.k === '1'; malen(); });
+    document.querySelectorAll('[data-send]').forEach(b => b.onclick = () => senden([E[b.dataset.send]]));
+    if ($('#etAlle')) $('#etAlle').onclick = () => senden(ok);
+    $('#etZu').onclick = () => { E.forEach(e => Object.values(e.url).forEach(u => URL.revokeObjectURL(u))); dialogZu(); };
+  };
+  const senden = async liste => {
+    const files = liste.map(e => new File([e.bild[e.klein]], `${e.name} ${e.klein ? 'klein' : 'gross'}.png`, { type: 'image/png' }));
+    try {
+      if (navigator.canShare && navigator.canShare({ files })) await navigator.share({ files });
+      else {
+        files.forEach(f => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); });
+        toast('Als Bild gespeichert – in iPrint&Label unter „Fotos“ öffnen und drucken.');
+      }
+    } catch (x) { if (x.name !== 'AbortError') toast('Senden ging nicht: ' + x.message); return; }
+    liste.forEach(e => gedrucktMerken(e.name));
+    try { localStorage.setItem('rb_etikett', liste[liste.length - 1].klein ? 'klein' : 'gross'); } catch (x) { /* egal */ }
+    malen();
+  };
+  malen();
+}
+
 // ---------- Start ----------
 function geheZu(seite) { S.seite = seite; zeichnen(); }
 window.geheZu = geheZu; window.dialogZu = dialogZu; window.ausgabeDialog = ausgabeDialog;
