@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -83,7 +83,7 @@ function aufbereiten(d) {
     vk: zahl(r[6]) || 0, versand: zahl(r[7]) || 0, gebuehren: zahl(r[8]), porto: zahl(r[9]), erstattet: zahl(r[10]) || 0,
     ek: zahl(r[11]), gewinn: typeof r[12] === 'number' ? r[12] : null, gewinnText: typeof r[12] === 'string' ? r[12] : '',
     sendung: String(r[13] || ''), status: String(r[14] || ''), hinweis: r[16], monat: String(r[17] || ''), id: r[18],
-    versender: r[19], artikelIds: r[20], ekQuelle: r[21]
+    versender: r[19], artikelIds: r[20], ekQuelle: r[21], privat: r[24] === 'ja'
   })).filter(v => v.id && v.datum);
   const E = d.einkaeufe.map(r => ({
     nr: r[0], datum: dat(r[1]), haendler: r[2], shop: r[3], bestellnr: r[4], zahlungsart: r[5], positionen: r[6],
@@ -111,7 +111,8 @@ const iso = d => { const x = d || new Date(); return x.getFullYear() + '-' + Str
 const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const r2 = n => Math.round(n * 100) / 100;
 const umsatzVon = v => v.vk + v.versand - v.erstattet;
-const aktiv = v => v.status !== 'Storniert';
+// „aktiv“ = zählt für die Buchhaltung: nicht storniert und nicht als privat markiert (Reiter „Privat prüfen“)
+const aktiv = v => v.status !== 'Storniert' && !v.privat;
 const gueltig = x => x.status !== 'Storniert';
 const monatName = m => new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
 
@@ -162,6 +163,35 @@ function jahresZahlen(jahr) {
   return { V, umsatz: r2(umsatz), gewinn: r2(gewinn), offen, tage, hochrechnung: r2(umsatz / tage * jahrTage) };
 }
 
+// ---------- Monatsbudget: Ziel = jedes Jahr unter der Kleinunternehmer-Grenze (25.000 €) bleiben ----------
+const jahresZiel = () => S.d.e.grenzeVorjahr || 25000;
+const monatsBudget = () => r2(jahresZiel() / 12);
+const umsatzMonat = key => r2(S.d.V.filter(v => aktiv(v) && v.monat === key).reduce((s, v) => s + umsatzVon(v), 0));
+function budgetStand() {
+  const heute = new Date(), j = heute.getFullYear(), mi = heute.getMonth();
+  const key = j + '-' + String(mi + 1).padStart(2, '0');
+  const vorher = S.d.V.filter(v => aktiv(v) && v.datum.getFullYear() === j && v.monat < key).reduce((s, v) => s + umsatzVon(v), 0) + (S.d.e.sonstigerUmsatz || 0);
+  const monat = umsatzMonat(key);
+  const restJahr = r2(jahresZiel() - vorher - monat);
+  const drin = r2(Math.max(0, Math.min(monatsBudget(), (jahresZiel() - vorher) / (12 - mi))));   // was diesen Monat realistisch passt
+  const st = restJahr < 0 ? ['krit', '⛔', 'Jahresgrenze überschritten'] : monat > drin ? ['krit', '⚠', 'Zu viel diesen Monat']
+    : monat > drin * 0.8 ? ['warn', '⚠', 'Knapp'] : ['gut', '✓', 'Passt'];
+  return { key, monat, budget: monatsBudget(), drin, restJahr, restMonate: 12 - mi, st };
+}
+function budgetKarte() {
+  const b = budgetStand(), p = b.drin ? Math.min(100, b.monat / b.drin * 100) : 100;
+  const farbe = { gut: 'var(--gut)', warn: 'var(--warn)', krit: 'var(--krit)' }[b.st[0]];
+  return `<div class="karte klickbar" onclick="grenzeDialog()" title="Verlauf Monat für Monat">
+    <div class="karte-kopf"><h3>Monatsbudget ${new Date().toLocaleDateString('de-DE', { month: 'long' })}</h3><span class="status ${b.st[0]}">${b.st[1]} ${b.st[2]}</span></div>
+    <div style="font-size:22px;font-weight:800">${eur(b.monat)} <span class="leise" style="font-size:14px;font-weight:600">von ${eur(b.drin)}</span></div>
+    <div class="hb-bahn" style="margin:8px 0"><div style="width:${p}%;background:${farbe}"></div></div>
+    <div class="klein">Bis 31.12. noch frei: <b>${eur(Math.max(0, b.restJahr))}</b>${b.restJahr < 0 ? ` <span class="chip rot">${eur(-b.restJahr)} drüber</span>` : ''}</div>
+    <div class="klein leise">Normal ${eur(b.budget)} pro Monat (${eur(jahresZiel())} ÷ 12)${b.drin < b.budget ? ' – wegen der Vormonate diesen Monat nur ' + eur(b.drin) : ''}.</div>
+  </div>`;
+}
+const budgetLegende = () => `<div class="klein leise" style="margin-top:6px"><span style="display:inline-block;width:18px;border-top:2px dashed var(--text-2);vertical-align:middle"></span> Monatsbudget ${eur(monatsBudget())}
+  &nbsp; <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--krit);vertical-align:middle"></span> Monat über Budget</div>`;
+
 const ohneEk = () => S.d.V.filter(v => v.datum >= S.d.buchAb && aktiv(v) && v.status !== 'Unbezahlt' && v.ek === null)
   .sort((a, b) => b.datum - a.datum);
 const imBestand = () => S.d.B.filter(b => b.rest > 0 && !['Storniert', 'Privat', 'Verkauft'].includes(b.status));
@@ -182,9 +212,9 @@ function monatsWerte(jahr) {
 
 // Säulendiagramm (eine Reihe). D = [{ label, wert, tipp, blass }]; beiKlick(i) optional.
 let DIA_NR = 0;
-function saeulen(D, beiKlick, titel) {
+function saeulen(D, beiKlick, titel, linie) {
   const id = 'dia' + (++DIA_NR);
-  const n = D.length, max = rundeHoch(Math.max(...D.map(d => d.wert)));
+  const n = D.length, max = rundeHoch(Math.max(linie || 0, ...D.map(d => d.wert)));
   const W = 640, H = 230, L = 46, R = 6, T = 10, B = 26, ph = H - T - B, bw = (W - L - R) / n, bb = Math.min(30, bw * 0.66);
   const y = v => T + ph - v / max * ph;
   const gitter = [0, max / 2, max].map(v => `<line class="gitter" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>
@@ -194,10 +224,11 @@ function saeulen(D, beiKlick, titel) {
     const x = L + i * bw + (bw - bb) / 2, h = Math.max(0, ph - (y(d.wert) - T)), r = Math.min(4, h, bb / 2), top = T + ph - h;
     const pfad = h > 0 ? `M${x},${T + ph} V${top + r} Q${x},${top} ${x + r},${top} H${x + bb - r} Q${x + bb},${top} ${x + bb},${top + r} V${T + ph} Z` : '';
     return `<g data-i="${i}" class="${beiKlick ? 'klickbar' : ''}"><rect class="treffer" x="${L + i * bw}" y="${T}" width="${bw}" height="${ph + B}"/>
-      ${pfad ? `<path class="balken ${d.blass ? 'blass' : ''}" d="${pfad}"/>` : ''}
+      ${pfad ? `<path class="balken ${d.blass ? 'blass' : ''} ${linie && d.wert > linie ? 'ueber' : ''}" d="${pfad}"/>` : ''}
       ${zeigLabel(i) ? `<text class="achse" x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${d.label}</text>` : ''}</g>`;
   }).join('');
-  return { html: `<div class="diagramm" id="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(titel || 'Diagramm')}">${gitter}${s}</svg><div class="tipp" hidden></div></div>`,
+  const budget = linie ? `<line class="budgetlinie" x1="${L}" x2="${W - R}" y1="${y(linie)}" y2="${y(linie)}"/>` : '';
+  return { html: `<div class="diagramm" id="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(titel || 'Diagramm')}">${gitter}${s}${budget}</svg><div class="tipp" hidden></div></div>`,
     verbinden: () => {
       const box = document.getElementById(id); if (!box) return;
       const tipp = $('.tipp', box), svg = $('svg', box);
@@ -227,10 +258,12 @@ function monatsDiagramm(jahr, markiert) {
   const D = MONATE_KURZ.map((m, i) => {
     const key = jahr + '-' + String(i + 1).padStart(2, '0');
     const V = S.d.V.filter(v => v.monat === key && aktiv(v));
-    return { key, label: m, wert: r2(V.reduce((s, v) => s + umsatzVon(v), 0)), tipp: tippMonat(monatName(key), V),
+    const wert = r2(V.reduce((s, v) => s + umsatzVon(v), 0)), b = monatsBudget();
+    const budgetText = wert > b ? `<br><span style="color:var(--krit)">⚠ ${eur(r2(wert - b))} über Monatsbudget</span>` : V.length ? `<br>✓ im Monatsbudget (${eur(b)})` : '';
+    return { key, label: m, wert, tipp: tippMonat(monatName(key), V) + budgetText,
       blass: markiert && markiert.length && !markiert.includes(key) };
   });
-  return saeulen(D, i => auswertung({ jahr, monate: [D[i].key] }), 'Umsatz pro Monat ' + jahr);
+  return saeulen(D, i => auswertung({ jahr, monate: [D[i].key] }), 'Umsatz pro Monat ' + jahr, monatsBudget());
 }
 
 // Umsatz pro Tag eines Monats
@@ -293,7 +326,7 @@ function grenzeDialog() {
     return i <= new Date().getMonth() ? `<tr><td>${monatName(key)}</td><td>${eur(r2(u))}</td><td>${eur(r2(summe))}</td><td>${Math.round(summe / g * 100)} %</td></tr>` : '';
   }).join('');
   dialog(`<h2 style="margin-top:0">Kleinunternehmer-Grenze ${j}</h2>
-    <div class="klein">Zählt: Umsatz aller Konten (Preis + Versand, abzüglich Erstattungen)${S.d.e.sonstigerUmsatz ? ' plus sonstiger Umsatz' : ''}.</div>
+    <div class="klein">Zählt: gewerblicher Umsatz aller Konten (Preis + Versand, abzüglich Erstattungen)${S.d.e.sonstigerUmsatz ? ' plus sonstiger Umsatz' : ''}. Als privat markierte Verkäufe (Reiter „Privat prüfen“ in der Tabelle) zählen nicht mit. Monatsbudget: ${eur(monatsBudget())}.</div>
     <div class="tabelle-scroll" style="margin-top:10px"><table><tr><th>Monat</th><th>Umsatz</th><th>Summe</th><th>Grenze</th></tr>${zeilen}</table></div>
     <div class="hinweis klein"><b>Die Regeln (§19 UStG):</b><br>
       • Über <b>${eur(g)}</b> in diesem Jahr → <b>nächstes Jahr</b> keine Kleinunternehmerregelung.<br>
@@ -322,7 +355,7 @@ function seiteStart() {
   inhalt().innerHTML = `
     <div class="hero">
       <div class="klickbar" onclick="auswertung({jahr:${j},monate:[]})" title="Auswertung öffnen">
-        <div class="label">Umsatz ${j} · alle Konten ›</div>
+        <div class="label">Umsatz ${j} · gewerblich, alle Konten ›</div>
         <div class="gross">${eur(k.umsatz)}</div>
       </div>
       <div class="reihe-h">
@@ -338,8 +371,9 @@ function seiteStart() {
       <div class="kachel klickbar" onclick="auswertung({jahr:${j},monate:[]})"><div class="ic">💸</div><div class="wert">${eur(r2(gebuehren))}</div><div class="text">Gebühren ${j} ›</div></div>
     </div>
     <div class="raster zwei">
-      <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3><span class="leise klein">${j}</span></div>${dia.html}</div>
+      <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3><span class="leise klein">${j}</span></div>${dia.html}${budgetLegende()}</div>
       <div style="display:flex;flex-direction:column;gap:14px">
+        ${budgetKarte()}
         <div class="karte"><div class="karte-kopf"><h3>Kleinunternehmer-Grenze</h3></div>${grenzeRing(k)}</div>
         <div class="karte"><div class="karte-kopf"><h3>Umsatz nach Konto</h3><span class="leise klein">${j}</span></div>${kontoBalken(k.V)}</div>
       </div>
@@ -374,7 +408,7 @@ function zeileVerkauf(v) {
   return `<div class="eintrag klickbar ${fehlt ? 'offen' : ''}" data-verkauf="${esc(v.id)}">
     <div class="avatar ${cm ? 'av-cm' : 'av-eb'}">${cm ? 'CM' : 'eB'}</div>
     <div class="haupt" title="${esc(v.artikel)}">${esc(v.artikel)}</div><div class="rechts">${eur(umsatzVon(v))}</div>
-    <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span>${gew}
+    <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span>${gew}${v.privat ? '<span class="chip" title="Zählt nicht zum Umsatz">🏠 privat</span>' : ''}
       <span class="chip ${v.status === 'Storniert' ? 'rot' : /Angekommen|Versendet/.test(v.status) ? 'gruen' : ''}">${esc(v.status)}</span>
       ${v.sendung ? `<a href="${trackingUrl(v.sendung, v.versender)}" target="_blank" rel="noopener">📦 Sendung</a>` : ''}</div>
     ${aktiv(v) ? `<div class="aktionen keindruck">
@@ -395,6 +429,7 @@ function seiteVerkaeufe() {
   if (f.konto) L = L.filter(v => kontoName(v) === f.konto);
   if (f.nur === 'ekfehlt') L = L.filter(v => v.ek === null && aktiv(v) && v.status !== 'Unbezahlt');
   if (f.nur === 'versenden') L = L.filter(v => /versenden|Bezahlt$/.test(v.status));
+  if (f.nur === 'privat') L = L.filter(v => v.privat);
   if (f.suche) { const s = f.suche.toLowerCase(); L = L.filter(v => (v.artikel + ' ' + v.kaeufer + ' ' + v.bestellnr).toLowerCase().includes(s)); }
   const summe = L.filter(aktiv).reduce((s, v) => s + umsatzVon(v), 0);
   inhalt().innerHTML = `
@@ -404,9 +439,9 @@ function seiteVerkaeufe() {
       <select id="fMonat"><option value="">Alle Monate</option>${monate.map(m => `<option value="${m}" ${m === f.monat ? 'selected' : ''}>${monatName(m)}</option>`).join('')}</select>
       <select id="fPlatt"><option value="">Alle Plattformen</option>${['eBay', 'Cardmarket'].map(p => `<option ${p === f.plattform ? 'selected' : ''}>${p}</option>`).join('')}</select>
       <select id="fKonto"><option value="">Alle Konten</option>${konten.map(k => `<option ${k === f.konto ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
-      <select id="fNur"><option value="">Alle</option><option value="ekfehlt" ${f.nur === 'ekfehlt' ? 'selected' : ''}>EK fehlt</option><option value="versenden" ${f.nur === 'versenden' ? 'selected' : ''}>Noch versenden</option></select>
+      <select id="fNur"><option value="">Alle</option><option value="ekfehlt" ${f.nur === 'ekfehlt' ? 'selected' : ''}>EK fehlt</option><option value="versenden" ${f.nur === 'versenden' ? 'selected' : ''}>Noch versenden</option><option value="privat" ${f.nur === 'privat' ? 'selected' : ''}>Nur privat</option></select>
     </div>
-    <p class="leise klein">${L.length} Verkäufe · Umsatz ${eur(r2(summe))}</p>
+    <p class="leise klein">${L.length} Verkäufe · gewerblicher Umsatz ${eur(r2(summe))}${L.some(v => v.privat) ? ` · privat ${eur(r2(L.filter(v => v.privat && v.status !== 'Storniert').reduce((s, v) => s + umsatzVon(v), 0)))} (zählt nicht)` : ''}</p>
     <div class="liste">${L.slice(0, 200).map(zeileVerkauf).join('') || '<div class="leer">Keine Verkäufe gefunden.</div>'}</div>`;
   const neu = () => { f.suche = $('#fSuche').value; f.monat = $('#fMonat').value; f.plattform = $('#fPlatt').value; f.konto = $('#fKonto').value; f.nur = $('#fNur').value; seiteVerkaeufe(); };
   ['#fMonat', '#fPlatt', '#fKonto', '#fNur'].forEach(s => $(s).onchange = neu);
@@ -757,6 +792,8 @@ function seiteBerichte() {
   const k = jahresZahlen(j);
   const sum = f => r2(M.reduce((s, x) => s + x[f], 0));
   const dia = monatsDiagramm(j);
+  const PJ = S.d.V.filter(v => v.privat && v.status !== 'Storniert' && v.datum.getFullYear() === j);
+  const privatJahr = { n: PJ.length, summe: r2(PJ.reduce((s, v) => s + umsatzVon(v), 0)) };
   inhalt().innerHTML = `
     <h1>Berichte</h1>
     <div class="filter keindruck"><div class="segment">${jahre.map(x => `<button data-jahr="${x}" class="${x === j ? 'aktiv' : ''}">${x}</button>`).join('')}</div></div>
@@ -770,18 +807,21 @@ function seiteBerichte() {
       </div>
     </div>
     <div class="raster zwei">
-      <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3></div>${dia.html}</div>
+      <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3></div>${dia.html}${budgetLegende()}</div>
       <div class="karte"><div class="karte-kopf"><h3>Umsatz nach Konto</h3></div>${kontoBalken(k.V)}</div>
     </div>
+    ${privatJahr.n ? `<div class="hinweis klein">🏠 <b>${privatJahr.n} Verkäufe ${j} als privat markiert</b> (${eur(privatJahr.summe)}) – zählen nicht zu Umsatz, Grenze und EÜR.
+      <a href="#" onclick="S.filter.v={suche:'',monat:'',plattform:'',konto:'',nur:'privat'};geheZu('verkaeufe');return false">Anzeigen ›</a></div>` : ''}
 
     <h2>Monate ${j}</h2>
     <div class="karte tabelle-scroll"><table>
-      <tr><th>Monat</th><th>Verk.</th><th>Umsatz</th><th>Gebühren</th><th>Porto</th><th>Gewinn</th><th>Einkauf</th><th>Ausgaben</th></tr>
-      ${M.map(x => `<tr class="klickbar" data-mk="${x.key}" title="Monat öffnen"><td>${monatName(x.key)} ›</td><td>${x.anzahl}</td><td>${eur(x.umsatz)}</td><td>${eur(x.gebuehren)}</td><td>${eur(x.porto)}</td>
+      <tr><th>Monat</th><th>Verk.</th><th>Umsatz</th><th>Budget</th><th>Gebühren</th><th>Porto</th><th>Gewinn</th><th>Einkauf</th><th>Ausgaben</th></tr>
+      ${M.map(x => `<tr class="klickbar" data-mk="${x.key}" title="Monat öffnen"><td>${monatName(x.key)} ›</td><td>${x.anzahl}</td><td>${eur(x.umsatz)}</td>
+        <td>${x.umsatz > monatsBudget() ? `<span class="chip rot">⚠ +${eur(r2(x.umsatz - monatsBudget()))}</span>` : `<span class="chip gruen">✓ passt</span>`}</td><td>${eur(x.gebuehren)}</td><td>${eur(x.porto)}</td>
         <td class="${x.gewinn >= 0 ? 'plus' : 'minus'}">${eur(x.gewinn)}${x.offen ? ` <span class="chip gelb">${x.offen} offen</span>` : ''}</td><td>${eur(x.einkauf)}</td><td>${eur(x.ausgaben)}</td></tr>`).join('')}
-      <tr class="gesamt"><td>Gesamt</td><td>${M.reduce((s, x) => s + x.anzahl, 0)}</td><td>${eur(sum('umsatz'))}</td><td>${eur(sum('gebuehren'))}</td><td>${eur(sum('porto'))}</td><td>${eur(sum('gewinn'))}</td><td>${eur(sum('einkauf'))}</td><td>${eur(sum('ausgaben'))}</td></tr>
+      <tr class="gesamt"><td>Gesamt</td><td>${M.reduce((s, x) => s + x.anzahl, 0)}</td><td>${eur(sum('umsatz'))}</td><td>${sum('umsatz') > jahresZiel() ? `<span class="chip rot">⚠ über ${eur(jahresZiel())}</span>` : `<span class="chip gruen">✓ unter ${eur(jahresZiel())}</span>`}</td><td>${eur(sum('gebuehren'))}</td><td>${eur(sum('porto'))}</td><td>${eur(sum('gewinn'))}</td><td>${eur(sum('einkauf'))}</td><td>${eur(sum('ausgaben'))}</td></tr>
     </table></div>
-    <p class="leise klein">„Gewinn“ = pro Verkauf (Preis + Versand − Gebühren − Porto − Einkaufspreis). „Offen“ = Einkaufspreis oder Porto fehlt. Zeile antippen = Monat öffnen.</p>
+    <p class="leise klein">„Gewinn“ = pro Verkauf (Preis + Versand − Gebühren − Porto − Einkaufspreis). „Offen“ = Einkaufspreis oder Porto fehlt. „Budget“ = Monatsziel ${eur(monatsBudget())} (${eur(jahresZiel())} ÷ 12). Zeile antippen = Monat öffnen.</p>
 
     <h2>Was lohnt sich? Nach Produktart ${j}</h2>
     <div class="karte tabelle-scroll"><table>
@@ -823,8 +863,8 @@ function seiteBerichte() {
   dia.verbinden();
   const jahrFilter = x => x.datum && x.datum.getFullYear() === j;
   const z = n => (n === null || n === undefined) ? '' : String(n).replace('.', ',');
-  $('#xV').onclick = () => csv('Verkaeufe_' + j, ['Datum', 'Plattform', 'Konto', 'Bestellnr', 'Artikel', 'Käufer', 'Verkaufspreis', 'Versand', 'Gebühren', 'Porto', 'Erstattet', 'Einkaufspreis', 'Gewinn', 'Status', 'Sendungsnummer'],
-    S.d.V.filter(jahrFilter).sort((a, b) => a.datum - b.datum).map(v => [dt(v.datum), v.plattform, v.konto, v.bestellnr, v.artikel, v.kaeufer, z(v.vk), z(v.versand), z(v.gebuehren), z(v.porto), z(v.erstattet), z(v.ek), z(v.gewinn), v.status, v.sendung]));
+  $('#xV').onclick = () => csv('Verkaeufe_' + j, ['Datum', 'Plattform', 'Konto', 'Bestellnr', 'Artikel', 'Käufer', 'Verkaufspreis', 'Versand', 'Gebühren', 'Porto', 'Erstattet', 'Einkaufspreis', 'Gewinn', 'Status', 'Sendungsnummer', 'Privat (nicht im Umsatz)'],
+    S.d.V.filter(jahrFilter).sort((a, b) => a.datum - b.datum).map(v => [dt(v.datum), v.plattform, v.konto, v.bestellnr, v.artikel, v.kaeufer, z(v.vk), z(v.versand), z(v.gebuehren), z(v.porto), z(v.erstattet), z(v.ek), z(v.gewinn), v.status, v.sendung, v.privat ? 'ja' : '']));
   $('#xE').onclick = () => csv('Einkaeufe_' + j, ['Beleg-Nr', 'Datum', 'Händler', 'Shop', 'Bestellnr', 'Zahlungsart', 'Positionen', 'Warenwert', 'Versand', 'Gesamt', 'Beleg', 'Status'],
     S.d.E.filter(jahrFilter).sort((a, b) => a.datum - b.datum).map(e => [e.nr, dt(e.datum), e.haendler, e.shop, e.bestellnr, e.zahlungsart, e.positionen, z(e.warenwert), z(e.versand), z(e.gesamt), e.beleg, e.status]));
   $('#xA').onclick = () => csv('Ausgaben_' + j, ['Beleg-Nr', 'Datum', 'Kategorie', 'Beschreibung', 'Händler', 'Betrag', 'Zahlungsart', 'Beleg', 'Status'],
@@ -982,6 +1022,8 @@ function verkaufDialog(id) {
     ${z.length ? `<div class="klein" style="margin-top:8px">Aus Bestand: ${z.map(x => x.menge + '× ' + esc(x.artikelId)).join(', ')}</div>` : ''}
     <div class="klein" style="margin-top:8px">Status: <span class="chip">${esc(v.status)}</span> · Bestellnr. ${esc(v.bestellnr)}
       ${v.sendung ? ` · <a href="${trackingUrl(v.sendung, v.versender)}" target="_blank" rel="noopener">📦 Sendung verfolgen</a>` : ''}</div>
+    ${v.privat ? '<div class="hinweis klein">🏠 <b>Privatverkauf</b> – zählt nicht zu Umsatz, 25.000-€-Grenze und EÜR. Ändern im Reiter „Privat prüfen“ der Tabelle.</div>'
+      : (v.plattform === 'Cardmarket' || v.konto !== 'Haupt') ? '<div class="klein leise" style="margin-top:6px">Gewerblich gezählt. War das privat? Im Reiter „Privat prüfen“ der Tabelle anhaken.</div>' : ''}
     <div class="knopfleiste">
       ${aktiv(v) ? `<button class="knopf" id="vdZu">${v.ek === null ? 'Einkauf zuordnen' : 'EK ändern'}</button>
         <button class="knopf zwei" id="vdPorto">Porto ${v.porto === null ? 'eintragen' : 'ändern'}</button>` : ''}
@@ -995,7 +1037,7 @@ function verkaufDialog(id) {
 // ---------- Bestellungen: abends abarbeiten (versenden + Etiketten drucken) ----------
 // Nur Bestellungen der letzten 3 Wochen gelten als „offen“; ältere ohne Versand-Mail landen in „vermutlich versendet“.
 const PAKET_TAGE = 21;
-const versandOffen = v => aktiv(v) && /versenden|^Bezahlt$|Teilweise/.test(v.status);
+const versandOffen = v => v.status !== 'Storniert' && /versenden|^Bezahlt$|Teilweise/.test(v.status);   // auch private Pakete
 const zuVersenden = () => S.d.V.filter(v => versandOffen(v) && tageIm(v) <= PAKET_TAGE).sort((a, b) => a.datum - b.datum);
 const versandUnklar = () => S.d.V.filter(v => versandOffen(v) && tageIm(v) > PAKET_TAGE).sort((a, b) => b.datum - a.datum);
 function erledigtListe() { try { return JSON.parse(localStorage.getItem('rb_erledigt') || '{}'); } catch (e) { return {}; } }

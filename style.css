@@ -96,6 +96,8 @@ h2 { font-size: 16px; margin: 26px 0 12px; letter-spacing: -.2px; }
 .diagramm .gitter { stroke: var(--linie); stroke-width: 1; }
 .diagramm .balken { fill: var(--s1); transition: opacity .15s; }
 .diagramm .balken.leer { fill: var(--linie); }
+.diagramm .balken.ueber { fill: var(--krit); }
+.diagramm .budgetlinie { stroke: var(--text-2); stroke-width: 1.5; stroke-dasharray: 5 4; pointer-events: none; }
 .diagramm .treffer { fill: transparent; cursor: pointer; }
 .diagramm .treffer:hover + .balken, .diagramm g.aktiv .balken { opacity: .78; }
 .tipp { position: absolute; pointer-events: none; z-index: 3; background: var(--text); color: var(--bg); border-radius: 10px;
