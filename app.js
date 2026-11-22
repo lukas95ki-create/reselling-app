@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -101,7 +101,8 @@ function aufbereiten(d) {
   }));
   const Z = d.zuordnung.map(r => ({ verkaufId: r[0], artikelId: r[1], menge: zahl(r[2]) || 0, ek: zahl(r[3]) || 0, art: r[4] }));
   const e = d.einstellungen;
-  return { V, E, B, A, Z, e, buchAb: dat(e.buchhaltungAb) || new Date(2026, 11, 1), stand: dat(d.stand) };
+  return { V, E, B, A, Z, e, buchAb: dat(e.buchhaltungAb) || new Date(2026, 11, 1), stand: dat(d.stand),
+    privatGeprueft: new Set(d.privatGeprueft || []) };
 }
 
 // ---------- Formatierung ----------
@@ -146,7 +147,7 @@ function zeichnen() {
   const erl = erledigtListe(), pakete = zuVersenden().filter(v => !erl[v.id]).length;
   $('#navPakete').hidden = !pakete; $('#navPakete').textContent = pakete;
   ({ start: seiteStart, verkaeufe: seiteVerkaeufe, einkauf: seiteEinkauf, bestand: seiteBestand, ausgaben: seiteAusgaben,
-    berichte: seiteBerichte, auswertung: seiteAuswertung, versand: seiteVersand })[S.seite]();
+    berichte: seiteBerichte, auswertung: seiteAuswertung, versand: seiteVersand, steuer: seiteSteuer })[S.seite]();
   window.scrollTo(0, 0);
 }
 
@@ -810,6 +811,11 @@ function seiteBerichte() {
       <div class="karte"><div class="karte-kopf"><h3>Umsatz pro Monat</h3></div>${dia.html}${budgetLegende()}</div>
       <div class="karte"><div class="karte-kopf"><h3>Umsatz nach Konto</h3></div>${kontoBalken(k.V)}</div>
     </div>
+    <div class="karte klickbar keindruck" style="margin-top:14px;display:flex;gap:14px;align-items:center" onclick="S.steuerJahr=${j};geheZu('steuer')">
+      <div style="font-size:28px">🧾</div>
+      <div style="flex:1"><b>Steuererklärung ${j} vorbereiten ›</b>
+        <div class="klein leise">Checkliste, was noch fehlt, und welche Zahl in welches ELSTER-Feld gehört.</div></div>
+    </div>
     ${privatJahr.n ? `<div class="hinweis klein">🏠 <b>${privatJahr.n} Verkäufe ${j} als privat markiert</b> (${eur(privatJahr.summe)}) – zählen nicht zu Umsatz, Grenze und EÜR.
       <a href="#" onclick="S.filter.v={suche:'',monat:'',plattform:'',konto:'',nur:'privat'};geheZu('verkaeufe');return false">Anzeigen ›</a></div>` : ''}
 
@@ -1032,6 +1038,90 @@ function verkaufDialog(id) {
     const zu = $('#vdZu', box); if (zu) zu.onclick = () => zuordnenDialog(id);
     const po = $('#vdPorto', box); if (po) po.onclick = () => { dialogZu(); portoDialog(id); };
   });
+}
+
+// ---------- Steuererklärung: Checkliste + ELSTER-Ausfüllhilfe ----------
+const privatKandidat = v => v.plattform === 'Cardmarket' || (v.plattform === 'eBay' && v.konto !== 'Haupt');
+function seiteSteuer() {
+  const jahre = [...new Set(S.d.V.map(v => v.datum.getFullYear()))].sort().reverse();
+  const j = S.steuerJahr || (new Date().getFullYear() - 1);
+  const e = euer(j);
+  const VJ = S.d.V.filter(v => v.datum.getFullYear() === j && v.status !== 'Storniert');
+  const gew = VJ.filter(aktiv);
+  const kand = VJ.filter(privatKandidat), geprueft = kand.filter(v => S.d.privatGeprueft.has(v.id)).length;
+  const EJ = S.d.E.filter(x => gueltig(x) && x.datum && x.datum.getFullYear() === j);
+  const AJ = S.d.A.filter(a => gueltig(a) && a.datum && a.datum.getFullYear() === j);
+  const portoBelege = r2(AJ.filter(a => /Porto/i.test(a.kategorie)).reduce((s, a) => s + a.betrag, 0));
+  const ohnePorto = gew.filter(v => v.porto === null && /Versendet|Angekommen|Teilweise/.test(v.status)).length;
+  const ohneGeb = gew.filter(v => v.gebuehren === null).length;
+  const proKonto = {}; VJ.forEach(v => { const k = kontoName(v); proKonto[k] = (proKonto[k] || 0) + 1; });
+  const kontenText = Object.entries(proKonto).sort().map(([k, n]) => `${esc(k)}: ${n}`).join(' · ');
+  const zweitFehlt = !VJ.some(v => v.plattform === 'eBay' && v.konto === 'Zweit');
+  const punkt = (st, titel, text, knopf) => {
+    const s = { gut: ['gut', '✓', 'Erledigt'], warn: ['warn', '⚠', 'Offen'], krit: ['krit', '⛔', 'Fehlt'], info: ['', 'ℹ', 'Hinweis'] }[st];
+    return `<div class="eintrag" style="grid-template-columns:auto 1fr"><span class="status ${s[0]}" style="grid-row:span 2;align-self:start">${s[1]} ${s[2]}</span>
+      <div class="haupt" style="white-space:normal">${titel}</div><div class="unter" style="grid-column:2">${text}${knopf ? ` ${knopf}` : ''}</div></div>`;
+  };
+  const gebuehrenEbay = r2(gew.filter(v => v.plattform === 'eBay').reduce((s, v) => s + (v.gebuehren || 0), 0));
+  const gebuehrenCm = r2(gew.filter(v => v.plattform === 'Cardmarket').reduce((s, v) => s + (v.gebuehren || 0), 0));
+  const sonstSumme = r2(Object.values(e.sonst).reduce((s, x) => s + x, 0));
+  const uebrige = r2(e.gebuehren + e.porto + sonstSumme);
+  inhalt().innerHTML = `
+    <h1>Steuererklärung ${j}</h1>
+    <div class="filter keindruck"><div class="segment">${jahre.map(x => `<button data-sj="${x}" class="${x === j ? 'aktiv' : ''}">${x}</button>`).join('')}</div></div>
+    <div class="hero" style="padding:18px 20px">
+      <div class="label">Gewinn ${j} laut deinen Daten (Anlage EÜR)</div>
+      <div class="gross" style="font-size:32px">${eur(e.ergebnis)}</div>
+      <div class="reihe-h">
+        <div class="pille"><div class="k">Einnahmen</div><div class="w">${eur(e.einnahmen)}</div></div>
+        <div class="pille"><div class="k">Ausgaben</div><div class="w">${eur(e.ausgaben)}</div></div>
+        <div class="pille"><div class="k">davon Wareneinkauf</div><div class="w">${eur(e.ware)}</div></div>
+      </div>
+    </div>
+    ${!EJ.length ? `<div class="hinweis"><b>⛔ Wichtig:</b> Für ${j} sind noch <b>keine Einkäufe</b> erfasst. So würdest du fast den ganzen Umsatz als Gewinn versteuern. Erst Einkäufe nachtragen, dann abgeben.</div>` : ''}
+
+    <h2>Checkliste</h2>
+    <div class="liste">
+      ${punkt(zweitFehlt && j >= 2025 ? 'warn' : 'gut', `Verkäufe ${j} vollständig: ${VJ.length}`, kontenText + (zweitFehlt ? ` · <b>Vom eBay-Zweitkonto sind für ${j} keine Verkäufe da – stimmt das?</b>` : ''))}
+      ${punkt(ohneGeb ? 'warn' : 'gut', 'Verkaufsgebühren', ohneGeb ? `${ohneGeb} Verkäufe ohne Gebühr` : `alle exakt von eBay/Cardmarket übernommen (${eur(e.gebuehren)})`)}
+      ${punkt(!kand.length || geprueft === kand.length ? 'gut' : 'warn', 'Privat oder gewerblich entschieden', kand.length ? `${geprueft} von ${kand.length} Verkäufen (eBay-Zweitkonto + Cardmarket) entschieden – im Reiter „Privat prüfen“ der Tabelle anhaken.` : 'keine Verkäufe zu prüfen')}
+      ${punkt(EJ.length ? 'gut' : 'krit', `Einkäufe ${j}`, EJ.length ? `${EJ.length} Einkäufe, zusammen ${eur(e.ware)}` : 'noch keine erfasst – Belege, Kontoauszüge oder PayPal-Liste nachtragen.', '<button class="knopf klein zwei" onclick="geheZu(\'einkauf\')">Einkauf erfassen</button>')}
+      ${punkt(ohnePorto && !portoBelege ? 'warn' : 'gut', 'Porto / Versand', `eBay-Versandetiketten: ${eur(e.porto)}${portoBelege ? ` · Porto-Belege: ${eur(portoBelege)}` : ''}${ohnePorto ? ` · <b>${ohnePorto} Sendungen ohne eBay-Etikett</b> (Briefmarken, Online-Frankierung, Cardmarket) – Belege als Ausgabe „Porto (ohne Bestellung)“ erfassen.` : ''}`, ohnePorto && !portoBelege ? '<button class="knopf klein zwei" onclick="ausgabeDialog()">Ausgabe erfassen</button>' : '')}
+      ${punkt(AJ.length ? 'gut' : 'warn', `Sonstige Ausgaben ${j}`, AJ.length ? `${AJ.length} Ausgaben, zusammen ${eur(sonstSumme)}` : 'noch keine – z. B. Versandmaterial, Hüllen, Toploader, Abos, Software.', '<button class="knopf klein zwei" onclick="ausgabeDialog()">Ausgabe erfassen</button>')}
+      ${punkt('info', 'Brief vom Finanzamt', 'Die Frist im Brief zählt. Reicht sie nicht, kurz beim Finanzamt um Fristverlängerung bitten.')}
+    </div>
+
+    <h2>ELSTER: Anlage EÜR ${j}</h2>
+    <div class="karte tabelle-scroll"><table>
+      <tr><th>Feld in ELSTER (Bezeichnung)</th><th>Betrag</th></tr>
+      <tr><td>Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer</td><td><b>${eur(e.einnahmen)}</b></td></tr>
+      <tr class="gesamt"><td>Summe Betriebseinnahmen</td><td>${eur(e.einnahmen)}</td></tr>
+      <tr><td>Waren, Rohstoffe und Hilfsstoffe einschließlich der Nebenkosten</td><td><b>${eur(e.ware)}</b></td></tr>
+      <tr><td>Übrige unbeschränkt abziehbare Betriebsausgaben<div class="klein leise">Verkaufsgebühren eBay ${eur(gebuehrenEbay)} · Cardmarket ${eur(gebuehrenCm)} · Versandetiketten ${eur(e.porto)}${Object.entries(e.sonst).map(([k, b]) => ` · ${esc(k)} ${eur(r2(b))}`).join('')}</div></td><td><b>${eur(uebrige)}</b></td></tr>
+      <tr class="gesamt"><td>Summe Betriebsausgaben</td><td>${eur(e.ausgaben)}</td></tr>
+      <tr class="gesamt"><td>Gewinn → in die <b>Anlage G</b> übernehmen</td><td class="${e.ergebnis >= 0 ? 'plus' : 'minus'}">${eur(e.ergebnis)}</td></tr>
+    </table></div>
+    <p class="leise klein">Als Kleinunternehmer trägst du alle Beträge <b>brutto</b> ein (so wie bezahlt). Die Zeilennummern ändern sich je nach Formularjahr – in ELSTER einfach nach der Bezeichnung suchen.
+      Werbegebühren von eBay („Anzeigen“) stecken in den Verkaufsgebühren; auf Wunsch kann man sie unter „Werbekosten“ eintragen – am Gewinn ändert das nichts.
+      Erstattungen an Käufer sind von den Einnahmen schon abgezogen. Privat markierte Verkäufe sind nicht enthalten.</p>
+
+    <h2>Welche Formulare du brauchst</h2>
+    <div class="karte"><ul style="margin:0;padding-left:18px;line-height:1.7">
+      <li><b>Hauptvordruck (Mantelbogen)</b> der Einkommensteuererklärung</li>
+      <li><b>Anlage EÜR</b> – Pflicht, nur online über ELSTER (Werte oben)</li>
+      <li><b>Anlage G</b> – Gewinn aus Gewerbebetrieb (Einzelunternehmen „Online-Handel“, Gewinn aus der EÜR)</li>
+      <li><b>Anlage N</b> – nur wenn du angestellt warst (Werte von der Lohnsteuerbescheinigung)</li>
+      <li><b>Anlage SO</b> – nur wenn du <i>privat</i> etwas innerhalb eines Jahres nach dem Kauf mit Gewinn verkauft hast (steuerfrei, solange alle solchen Gewinne im Jahr unter 1.000 € bleiben)</li>
+      <li><b>Anlage KAP</b> – Kapitalerträge (z. B. Trade Republic); meist freiwillig, wenn die Steuer schon abgezogen wurde</li>
+      <li><b>Keine Umsatzsteuererklärung</b> als Kleinunternehmer – außer das Finanzamt fordert sie an</li>
+      <li><b>Gewerbesteuererklärung</b> nur, wenn der Gewinn über 24.500 € liegt</li>
+    </ul></div>
+    <div class="knopfleiste keindruck">
+      <button class="knopf" onclick="S.jahr=${j};geheZu('berichte');setTimeout(()=>{const b=document.getElementById('xJ');if(b)b.click();},50)">📦 Jahresabschluss-Paket ${j} erstellen</button>
+      <button class="knopf zwei" onclick="window.print()">Drucken / PDF</button>
+    </div>
+    <p class="leise klein">Das ist eine Ausfüllhilfe aus deinen Daten, keine Steuerberatung. Bei Unsicherheit (z. B. privat/gewerblich) kurz mit einem Steuerberater abstimmen.</p>`;
+  document.querySelectorAll('[data-sj]').forEach(b => b.onclick = () => { S.steuerJahr = Number(b.dataset.sj); seiteSteuer(); });
 }
 
 // ---------- Bestellungen: abends abarbeiten (versenden + Etiketten drucken) ----------
