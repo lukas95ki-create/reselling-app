@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -963,6 +963,7 @@ function seiteAuswertung() {
   const top = {};
   V.forEach(v => { const k = String(v.artikel).replace(/^\d+x /, '').slice(0, 70); const t = top[k] || (top[k] = { n: 0, u: 0, g: 0, ok: 0 }); t.n++; t.u += umsatzVon(v); if (v.gewinn !== null) { t.g += v.gewinn; t.ok++; } });
   const topL = Object.entries(top).sort((x, y) => y[1].u - x[1].u).slice(0, 5);
+  S.portoAuswahl = { V, titel };
   inhalt().innerHTML = `
     <h1>Auswertung</h1>
     <div class="filter keindruck"><div class="segment">${jahre.map(x => `<button data-j="${x}" class="${x === a.jahr ? 'aktiv' : ''}">${x}</button>`).join('')}</div></div>
@@ -982,7 +983,7 @@ function seiteAuswertung() {
     </div>
     <div class="kacheln">
       <div class="kachel"><div class="ic">💸</div><div class="wert">${eur(geb)}</div><div class="text">Gebühren (${umsatz ? Math.round(geb / umsatz * 100) : 0} %)</div></div>
-      <div class="kachel"><div class="ic">✉</div><div class="wert">${eur(porto)}</div><div class="text">Porto / Etiketten</div></div>
+      <div class="kachel klickbar" onclick="portoDialog()" title="Welche Versandprodukte?"><div class="ic">✉</div><div class="wert">${eur(porto)}</div><div class="text">Porto / Etiketten ›</div></div>
       <div class="kachel"><div class="ic">🧮</div><div class="wert">${V.length ? eur(r2(umsatz / V.length)) : '–'}</div><div class="text">Ø pro Verkauf</div></div>
       <div class="kachel klickbar ${offen ? 'warnung' : ''}" onclick="filterSetzen('ekfehlt')"><div class="ic">🧾</div><div class="wert">${offen}</div><div class="text">ohne Einkaufspreis ›</div></div>
     </div>
@@ -1039,6 +1040,46 @@ function verkaufDialog(id) {
     const po = $('#vdPorto', box); if (po) po.onclick = () => { dialogZu(); portoDialog(id); };
   });
 }
+
+// ---------- Versand: welche Versandprodukte wie oft? ----------
+// Briefe am Etikett-Preis (Deutsche-Post-Tarife), Pakete am Versanddienst erkennen
+const DP_TARIFE = { '0.95': 'Standardbrief', '1.10': 'Kompaktbrief', '1.80': 'Großbrief', '2.90': 'Maxibrief' };
+function versandProdukt(v) {
+  const vs = String(v.versender || ''), key = v.porto.toFixed(2);
+  if (/hermes/i.test(vs)) return { dienst: 'Hermes', name: 'Hermes-Paket' };
+  if (/dpd/i.test(vs)) return { dienst: 'DPD', name: 'DPD-Paket' };
+  if (/dhl germany/i.test(vs)) return { dienst: 'DHL', name: 'DHL Paket / Päckchen' };
+  if (DP_TARIFE[key]) return { dienst: 'Deutsche Post', name: DP_TARIFE[key] };
+  if (/deutsche post/i.test(vs)) return { dienst: 'Deutsche Post', name: 'Sonstige Post-Sendung' };
+  return { dienst: '', name: v.porto >= 4 ? 'Paket (Versanddienst unbekannt)' : 'Sonstige Sendung' };
+}
+function portoDialog() {
+  const { V, titel } = S.portoAuswahl || { V: [], titel: '' };
+  const mit = V.filter(v => v.porto !== null && v.porto > 0);
+  const ohne = V.filter(v => v.porto === null && /Versendet|Angekommen|Teilweise/.test(v.status));
+  const monate = Math.max(1, new Set(V.map(v => v.monat)).size);
+  const g = {};
+  mit.forEach(v => {
+    const p = versandProdukt(v), k = p.name + '|' + v.porto.toFixed(2);
+    const x = g[k] || (g[k] = { name: p.name, dienst: p.dienst, preis: v.porto, n: 0, s: 0 });
+    x.n++; x.s += v.porto;
+  });
+  const reihen = Object.values(g).sort((a, b) => b.n - a.n || b.preis - a.preis);
+  const summe = r2(mit.reduce((s, v) => s + v.porto, 0)), max = Math.max(1, ...reihen.map(r => r.n));
+  dialog(`<h2 style="margin-top:0">✉ Versand · ${esc(titel)}</h2>
+    <div class="klein">${mit.length} Sendungen mit eBay-Etikett · zusammen <b>${eur(summe)}</b>${mit.length ? ` · Ø ${eur(r2(summe / mit.length))} pro Sendung` : ''}</div>
+    <div class="tabelle-scroll" style="margin-top:10px"><table>
+      <tr><th>Versandprodukt</th><th>Preis</th><th>Anzahl</th>${monate > 1 ? '<th>Ø/Monat</th>' : ''}<th>Summe</th></tr>
+      ${reihen.map(r => `<tr><td style="white-space:normal;min-width:170px"><b>${esc(r.name)}</b>${r.dienst && !r.name.startsWith(r.dienst) ? ` <span class="leise klein">${esc(r.dienst)}</span>` : ''}
+          <div class="hb-bahn" style="height:6px;margin-top:5px"><div style="width:${r.n / max * 100}%;background:var(--s1)"></div></div></td>
+        <td>${eur(r.preis)}</td><td><b>${r.n}×</b></td>${monate > 1 ? `<td>${(r.n / monate).toLocaleString('de-DE', { maximumFractionDigits: 1 })}</td>` : ''}<td>${eur(r2(r.s))}</td></tr>`).join('') || '<tr><td colspan="5" class="leise">Keine Sendungen mit eBay-Etikett in dieser Auswahl.</td></tr>'}
+      ${reihen.length ? `<tr class="gesamt"><td>Gesamt</td><td></td><td>${mit.length}×</td>${monate > 1 ? `<td>${(mit.length / monate).toLocaleString('de-DE', { maximumFractionDigits: 1 })}</td>` : ''}<td>${eur(summe)}</td></tr>` : ''}
+    </table></div>
+    ${ohne.length ? `<div class="hinweis klein"><b>${ohne.length} weitere Sendungen ohne Etikett-Kosten</b> (${ohne.filter(v => v.plattform === 'Cardmarket').length} Cardmarket, ${ohne.filter(v => v.plattform !== 'Cardmarket').length} eBay) – mit Briefmarken oder Online-Frankierung verschickt. Diese Kosten kommen über deine Ausgaben (Kategorie „Porto (ohne Bestellung)“).</div>` : ''}
+    <p class="klein leise">Briefe erkenne ich am Preis (Deutsche Post: Standardbrief 0,95 €, Kompaktbrief 1,10 €, Großbrief 1,80 €, Maxibrief 2,90 €), Pakete am Versanddienst. Andere Beträge stehen mit ihrem Preis da.</p>
+    <div class="knopfleiste"><button class="knopf zwei" onclick="dialogZu()">Schließen</button></div>`);
+}
+window.portoDialog = portoDialog;
 
 // ---------- Steuererklärung: Checkliste + ELSTER-Ausfüllhilfe ----------
 const privatKandidat = v => v.plattform === 'Cardmarket' || (v.plattform === 'eBay' && v.konto !== 'Haupt');
