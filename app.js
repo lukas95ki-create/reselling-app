@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '13';
+const APP_VERSION = '14';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -142,7 +142,7 @@ function dialogZu() { $('#dialog').hidden = true; $('#dialogBox').innerHTML = ''
 // ---------- Navigation ----------
 function zeichnen() {
   if (!S.d) return;
-  $('#stand').textContent = (S.d.e.letzteAktualisierung ? 'Stand ' + new Date(S.d.e.letzteAktualisierung).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' · ' : '') + 'App v' + APP_VERSION;
+  $('#stand').innerHTML = (S.d.e.letzteAktualisierung ? '<span class="nur-breit">Stand </span>' + new Date(S.d.e.letzteAktualisierung).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '') + ' · ' : '') + '<span class="nur-breit">App </span>v' + APP_VERSION;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('aktiv', b.dataset.seite === S.seite));
   const erl = erledigtListe(), pakete = zuVersenden().filter(v => !erl[v.id]).length;
   $('#navPakete').hidden = !pakete; $('#navPakete').textContent = pakete;
@@ -1339,40 +1339,85 @@ function paketDialog(id) {
 }
 window.paketDialog = paketDialog;
 
+// Konto lesbar benennen (Farbe kommt aus kontoFarben – fest je Konto wie in den Diagrammen)
+const kontoLabelName = k => { const [p, k2] = String(k).split(' · ');
+  return p === 'eBay' ? ({ Haupt: 'eBay Hauptkonto', Zweit: 'eBay Zweitkonto' }[k2] || 'eBay ' + k2) : p + ' ' + k2; };
+const kontoLabel = v => kontoLabelName(kontoName(v));
+const tagLabel = d => {
+  const h = new Date(); h.setHours(0, 0, 0, 0); const t = new Date(d); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((h - t) / 864e5);
+  return diff === 0 ? 'Heute' : diff === 1 ? 'Gestern' : t.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit' });
+};
+
 function seiteVersand() {
-  const L = zuVersenden(), erl = erledigtListe(), alt = versandUnklar();
-  const offen = L.filter(v => !erl[v.id]), fertig = L.filter(v => erl[v.id]);
-  const gruppe = (titel, liste) => liste.length ? `<h2>${titel} <span class="chip">${liste.length}</span></h2>
-    <div class="liste">${liste.map(v => { const P = positionen(v), stk = P.reduce((s, p) => s + p.menge, 0);
-      return `<div class="eintrag versand klickbar ${erl[v.id] ? 'fertig' : ''}" data-paket="${esc(v.id)}" title="Antippen: Inhalt ansehen">
-      <label class="haken"><input type="checkbox" data-erl="${esc(v.id)}" ${erl[v.id] ? 'checked' : ''}><span></span></label>
+  const pf = S.filter.p || (S.filter.p = { ansicht: 'offen', konto: '' });
+  const farbe = kontoFarben(), erl = erledigtListe();
+  const passtKonto = v => !pf.konto || kontoName(v) === pf.konto;
+  const L = zuVersenden(), alt = versandUnklar().filter(passtKonto);
+  const offenAlle = L.filter(v => !erl[v.id]);
+  const offen = offenAlle.filter(passtKonto), fertig = L.filter(v => erl[v.id] && passtKonto(v));
+  const seit30 = Date.now() - 30 * 864e5;
+  const alleBest = S.d.V.filter(v => v.datum >= seit30 && passtKonto(v)).sort((a, b) => b.datum - a.datum);
+  const heute = S.d.V.filter(v => tagLabel(v.datum) === 'Heute' && v.status !== 'Storniert');
+  const konten = [...new Set(S.d.V.filter(v => v.datum >= seit30).map(kontoName))].sort();
+
+  // eine Bestellung: Käufer, Konto (farbig), Bestellnr., Artikelzahl; antippen = Inhalt
+  const zeile = (v, mitHaken) => {
+    const P = positionen(v), stk = P.reduce((s, p) => s + p.menge, 0), st = verkaufStatus(v), cm = v.plattform === 'Cardmarket';
+    return `<div class="eintrag versand klickbar ${erl[v.id] && mitHaken ? 'fertig' : ''} ${v.status === 'Storniert' ? 'storno' : ''}" data-paket="${esc(v.id)}" title="Antippen: Inhalt ansehen">
+      ${mitHaken ? `<label class="haken"><input type="checkbox" data-erl="${esc(v.id)}" ${erl[v.id] ? 'checked' : ''}><span></span></label>`
+        : `<div class="avatar ${cm ? 'av-cm' : 'av-eb'}">${cm ? 'CM' : 'eB'}</div>`}
       <div class="haupt">👤 ${esc(v.kaeufer || 'Käufer unbekannt')}</div><div class="rechts">${eur(umsatzVon(v))}</div>
-      <div class="unter"><span>Bestellnr. <b>${esc(v.bestellnr)}</b></span><span>${stk} ${stk === 1 ? 'Artikel' : 'Artikel'}</span><span>${dt(v.datum)} · ${esc(v.konto)}</span>
-        <span class="chip ${Date.now() - v.datum > 2 * 864e5 ? 'gelb' : ''}">seit ${Math.max(0, Math.floor((Date.now() - v.datum) / 864e5))} Tagen</span>
-        <span class="paket-auf">Inhalt ansehen ›</span></div></div>`; }).join('')}</div>` : '';
-  const cm = offen.filter(v => v.plattform === 'Cardmarket'), eb = offen.filter(v => v.plattform !== 'Cardmarket');
+      <div class="unter"><span class="konto-chip"><span class="punkt" style="background:${farbe[kontoName(v)]}"></span>${esc(kontoLabel(v))}</span>
+        <span>Nr. <b>${esc(v.bestellnr)}</b></span><span>${stk} Artikel</span>
+        ${mitHaken ? `<span class="chip ${Date.now() - v.datum > 2 * 864e5 ? 'gelb' : ''}">seit ${Math.max(0, Math.floor((Date.now() - v.datum) / 864e5))} Tagen</span>`
+          : `<span><span class="punkt-st ${st[0]}"></span>${esc(st[1])}</span>`}
+        <span class="paket-auf">Inhalt ›</span></div></div>`;
+  };
+  // nach Tagen gruppiert: Heute, Gestern, Wochentag + Datum
+  const nachTagen = (liste, mitHaken) => {
+    const g = {}; liste.forEach(v => { const k = iso(v.datum); (g[k] || (g[k] = [])).push(v); });
+    return Object.keys(g).sort().reverse().map(k => {
+      const T = g[k], summe = r2(T.filter(v => v.status !== 'Storniert').reduce((s, v) => s + umsatzVon(v), 0));
+      return `<div class="tag-kopf"><span>${tagLabel(T[0].datum)} · ${T.length} ${T.length === 1 ? 'Bestellung' : 'Bestellungen'}</span><span>${eur(summe)}</span></div>
+        <div class="liste">${T.map(v => zeile(v, mitHaken)).join('')}</div>`;
+    }).join('');
+  };
+  const zahlKonto = k => pf.ansicht === 'offen' ? offenAlle.filter(v => kontoName(v) === k).length : heute.filter(v => kontoName(v) === k).length;
+  const heuteSumme = r2(heute.reduce((s, v) => s + umsatzVon(v), 0));
+
   inhalt().innerHTML = `
     <h1>Bestellungen</h1>
     <div class="hero" style="padding:18px 20px">
-      <div class="label">Heute zu erledigen</div>
-      <div class="gross" style="font-size:34px">${offen.length} ${offen.length === 1 ? 'Paket' : 'Pakete'}</div>
-      <div class="reihe-h">
-        <div class="pille"><div class="k">Cardmarket</div><div class="w">${cm.length}</div></div>
-        <div class="pille"><div class="k">eBay</div><div class="w">${eb.length}</div></div>
-        <div class="pille"><div class="k">Erledigt</div><div class="w">${fertig.length}</div></div>
+      <div class="label">${pf.ansicht === 'offen' ? 'Heute zu erledigen' : 'Heute bestellt'}</div>
+      <div class="gross" style="font-size:clamp(24px, 7vw, 34px)">${pf.ansicht === 'offen' ? `${offenAlle.length} ${offenAlle.length === 1 ? 'Paket' : 'Pakete'}`
+        : `${heute.length} ${heute.length === 1 ? 'Bestellung' : 'Bestellungen'}${heute.length ? ' · ' + eur(heuteSumme) : ''}`}</div>
+      <div class="reihe-h konten">${konten.map(k => `<div class="pille klickbar ${pf.konto && pf.konto !== k ? 'blass' : ''}" data-pkonto="${esc(k)}" title="Nur dieses Konto zeigen">
+        <div class="k"><span class="punkt" style="background:${farbe[k]}"></span> ${esc(kontoLabelName(k))}</div><div class="w">${zahlKonto(k)}</div></div>`).join('')}</div>
+    </div>
+    <div class="filter keindruck" style="margin-top:14px;align-items:center">
+      <div class="segment">
+        <button data-pans="offen" class="${pf.ansicht === 'offen' ? 'aktiv' : ''}">📮 Zu versenden · ${offenAlle.length}</button>
+        <button data-pans="alle" class="${pf.ansicht === 'alle' ? 'aktiv' : ''}">📋 Alle Bestellungen</button>
       </div>
+      ${pf.konto ? `<div class="chipleiste" style="margin:0;padding:0"><button class="aktiv" data-pkonto="${esc(pf.konto)}">${esc(kontoLabelName(pf.konto))} ✕</button></div>` : ''}
     </div>
-    <div class="schnell keindruck">
-      ${istHandy ? '<button type="button" class="schnellknopf" id="btnHandyDruck"><b>🖨 Etikett drucken</b><span>Datei wählen → Brother-App</span></button>'
-        : '<a class="schnellknopf" href="etikettdruck://start" id="btnDruck"><b>🖨 Etiketten drucken</b><span>öffnet deine Drucker-App</span></a>'}
-      <a class="schnellknopf" href="https://www.ebay.de/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener"><b>🏷 eBay-Etiketten kaufen</b><span>eBay Verkäufer-Cockpit</span></a>
-    </div>
-    <p class="leise klein">Ablauf: Etikett kaufen und herunterladen → ${istHandy ? '„Etikett drucken“ → Datei wählen → an iPrint&amp;Label senden' : '„Etiketten drucken“'} → Paket packen → abhaken. Abgehakte Pakete verschwinden, sobald die Plattform „versendet“ meldet.</p>
-    ${offen.length ? '' : '<div class="karte leer">🎉 Alles versendet – nichts offen.</div>'}
-    ${gruppe('Cardmarket', cm)}${gruppe('eBay', eb)}${gruppe('Abgehakt', fertig)}
-    ${alt.length ? `<details class="karte" style="margin-top:16px"><summary style="cursor:pointer"><b>Älter als ${PAKET_TAGE} Tage – vermutlich schon versendet</b>
-      <span class="chip">${alt.filter(v => !erl[v.id]).length}</span>
-      <div class="klein leise">Dafür kam keine Versand-Mail an. Bitte kurz prüfen und abhaken.</div></summary>${gruppe('', alt).replace(/^<h2>.*?<\/h2>/s, '')}</details>` : ''}`;
+    ${pf.ansicht === 'offen' ? `
+      <div class="schnell keindruck">
+        ${istHandy ? '<button type="button" class="schnellknopf" id="btnHandyDruck"><b>🖨 Etikett drucken</b><span>Datei wählen → Brother-App</span></button>'
+          : '<a class="schnellknopf" href="etikettdruck://start" id="btnDruck"><b>🖨 Etiketten drucken</b><span>öffnet deine Drucker-App</span></a>'}
+        <a class="schnellknopf" href="https://www.ebay.de/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener"><b>🏷 eBay-Etiketten kaufen</b><span>eBay Verkäufer-Cockpit</span></a>
+      </div>
+      <p class="leise klein">Ablauf: Etikett kaufen und herunterladen → ${istHandy ? '„Etikett drucken“ → Datei wählen → an iPrint&amp;Label senden' : '„Etiketten drucken“'} → Paket packen → abhaken. Bestellung antippen zeigt, was rein muss.</p>
+      ${offen.length ? nachTagen(offen, true) : `<div class="karte leer">🎉 ${pf.konto ? 'Für dieses Konto ist' : 'Alles versendet –'} nichts offen.</div>`}
+      ${fertig.length ? `<h2>Abgehakt <span class="chip">${fertig.length}</span></h2><div class="liste">${fertig.map(v => zeile(v, true)).join('')}</div>` : ''}
+      ${alt.length ? `<details class="karte" style="margin-top:16px"><summary style="cursor:pointer"><b>Älter als ${PAKET_TAGE} Tage – vermutlich schon versendet</b>
+        <span class="chip">${alt.filter(v => !erl[v.id]).length}</span>
+        <div class="klein leise">Dafür kam keine Versand-Mail an. Bitte kurz prüfen und abhaken.</div></summary>
+        <div class="liste" style="margin-top:10px">${alt.map(v => zeile(v, true)).join('')}</div></details>` : ''}`
+    : `<p class="leise klein">Alle Bestellungen der letzten 30 Tage, nach Tag sortiert – mit Konto und Status. Antippen zeigt den Inhalt.</p>
+      ${alleBest.length ? nachTagen(alleBest, false) : '<div class="karte leer">Keine Bestellungen in den letzten 30 Tagen.</div>'}`}`;
+
   document.querySelectorAll('[data-erl]').forEach(c => c.onchange = () => {
     const auf = !!c.closest('details')?.open, y = window.scrollY;
     erledigtSetzen(c.dataset.erl, c.checked); zeichnen();
@@ -1383,6 +1428,9 @@ function seiteVersand() {
     if (e.target.closest('label, input, a, button')) return;   // Abhaken bleibt Abhaken
     paketDialog(z.dataset.paket);
   });
+  document.querySelectorAll('[data-pans]').forEach(b => b.onclick = () => { pf.ansicht = b.dataset.pans; seiteVersand(); });
+  document.querySelectorAll('[data-pkonto]').forEach(b => b.onclick = () => { pf.konto = pf.konto === b.dataset.pkonto ? '' : b.dataset.pkonto; seiteVersand(); });
+  if (pf.ansicht !== 'offen') return;
   if (istHandy) { $('#btnHandyDruck').onclick = etikettenWaehlen; return; }
   $('#btnDruck').onclick = () => {
     toast('Drucker-App wird geöffnet … (lädt ein paar Sekunden)');

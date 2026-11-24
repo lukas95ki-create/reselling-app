@@ -333,3 +333,10 @@ div.et-bild { height: 120px; display: grid; place-items: center; color: var(--le
 
 .paket-auf { color: var(--akzent); font-weight: 600; }
 .eintrag.versand.klickbar:hover { background: var(--flaeche-2); }
+
+.konto-chip { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--text-2); }
+.eintrag.versand.storno { opacity: .55; }
+
+@media (max-width: 480px) { .titel { font-size: 15px; } .kopf { gap: 8px; } .stand { font-size: 11px; line-height: 1.25; } }
+
+@media (max-width: 600px) { .reihe-h.konten { display: grid; grid-template-columns: 1fr 1fr; } .reihe-h.konten .pille .k { font-size: 11px; } }
