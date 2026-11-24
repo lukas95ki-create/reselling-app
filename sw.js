@@ -1,5 +1,5 @@
 // Offline-Cache für die App-Hülle. Daten kommen immer frisch von der Schnittstelle.
-const CACHE = 'reselling-v10';
+const CACHE = 'reselling-v11';
 const DATEIEN = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

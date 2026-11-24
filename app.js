@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -385,12 +385,13 @@ function seiteStart() {
     </div>
     ${alt.length ? `<h2>⏳ Ladenhüter <span class="chip gelb">${alt.length}</span></h2>
       <p class="leise klein" style="margin-top:-6px">Länger als ${LADENHUETER_TAGE} Tage im Bestand – Kapital frei machen?</p>
-      <div class="liste">${alt.slice(0, 4).map(zeileBestand).join('')}</div>
-      ${alt.length > 4 ? `<p class="klein"><a href="#" onclick="S.filter.b={suche:'',alle:false,nur:'alt'};geheZu('bestand');return false">Alle ${alt.length} Ladenhüter →</a></p>` : ''}` : ''}
-    ${offen.length ? `<h2>Einkaufspreis fehlt</h2><div class="liste">${offen.slice(0, 5).map(zeileVerkauf).join('')}</div>
+      <div class="bk-raster">${alt.slice(0, 4).map(zeileBestand).join('')}</div>
+      ${alt.length > 4 ? `<p class="klein"><a href="#" onclick="S.filter.b={suche:'',ansicht:'lager',art:'',alter:'',sort:'alter'};geheZu('bestand');return false">Alle ${alt.length} Ladenhüter →</a></p>` : ''}` : ''}
+    ${offen.length ? `<h2>Einkaufspreis fehlt</h2>${verkaufListe(offen.slice(0, 5))}
       ${offen.length > 5 ? `<p class="leise klein"><a href="#" onclick="filterSetzen('ekfehlt');return false">Alle ${offen.length} anzeigen →</a></p>` : ''}` : ''}
     <h2>Zuletzt verkauft</h2>
-    <div class="liste">${zuletzt.map(zeileVerkauf).join('') || '<div class="leer">Noch keine Verkäufe.</div>'}</div>
+    ${zuletzt.length ? verkaufListe(zuletzt) : '<div class="leer">Noch keine Verkäufe.</div>'}
+    <p class="klein"><a href="#" onclick="geheZu('verkaeufe');return false">Alle Verkäufe →</a></p>
     ${S.d.e.fehler && S.d.e.fehler !== '–' ? `<div class="hinweis klein">Letzter Abruf meldet: ${esc(S.d.e.fehler)}</div>` : ''}`;
   dia.verbinden();
   document.querySelectorAll('[data-konto]').forEach(z => z.onclick = () => auswertung({ jahr: j, monate: [], konto: z.dataset.konto }));
@@ -401,56 +402,131 @@ function filterSetzen(nur) { S.filter.v = { suche: '', monat: '', plattform: '',
 window.filterSetzen = filterSetzen;
 
 // ---------- Verkäufe ----------
+// Status als Ampelpunkt + kurzes Wort (nie nur Farbe)
+const verkaufStatus = v => /Storniert/.test(v.status) ? ['aus', 'storniert'] : /Erstattet/.test(v.status) ? ['krit', v.status.toLowerCase()]
+  : /versenden|^Bezahlt$|Teilweise/.test(v.status) ? ['warn', 'versenden'] : /Angekommen/.test(v.status) ? ['gut', 'angekommen']
+  : /Versendet/.test(v.status) ? ['gut', 'versendet'] : ['aus', String(v.status || '').toLowerCase()];
+
+// Kompakte Verkaufszeile: eine Zeile pro Verkauf, Details per Klick
 function zeileVerkauf(v) {
+  const cm = v.plattform === 'Cardmarket', st = verkaufStatus(v);
   const fehlt = v.ek === null && aktiv(v) && v.datum >= S.d.buchAb && v.status !== 'Unbezahlt';
-  const gew = v.gewinn !== null ? `<span class="gewinn ${v.gewinn >= 0 ? 'plus' : 'minus'}">${v.gewinn >= 0 ? '+' : ''}${eur(v.gewinn)}</span>`
-    : (aktiv(v) ? `<span class="chip gelb">${esc(v.gewinnText || 'offen')}</span>` : '');
-  const cm = v.plattform === 'Cardmarket';
-  return `<div class="eintrag klickbar ${fehlt ? 'offen' : ''}" data-verkauf="${esc(v.id)}">
-    <div class="avatar ${cm ? 'av-cm' : 'av-eb'}">${cm ? 'CM' : 'eB'}</div>
-    <div class="haupt" title="${esc(v.artikel)}">${esc(v.artikel)}</div><div class="rechts">${eur(umsatzVon(v))}</div>
-    <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span>${gew}${v.privat ? '<span class="chip" title="Zählt nicht zum Umsatz">🏠 privat</span>' : ''}
-      <span class="chip ${v.status === 'Storniert' ? 'rot' : /Angekommen|Versendet/.test(v.status) ? 'gruen' : ''}">${esc(v.status)}</span>
-      ${v.sendung ? `<a href="${trackingUrl(v.sendung, v.versender)}" target="_blank" rel="noopener">📦 Sendung</a>` : ''}</div>
-    ${aktiv(v) ? `<div class="aktionen keindruck">
-      <span class="chip">Gebühr ${eur(v.gebuehren)}</span><span class="chip">Porto ${eur(v.porto)}</span><span class="chip">EK ${eur(v.ek)}</span>
-      <button class="knopf klein ${fehlt ? '' : 'zwei'}" data-zuordnen="${esc(v.id)}">${v.ek === null ? 'Einkauf zuordnen' : 'EK ändern'}</button>
-      ${v.porto === null ? `<button class="knopf klein zwei" data-porto="${esc(v.id)}">Porto</button>` : ''}
-    </div>` : ''}
+  return `<div class="vz klickbar ${v.status === 'Storniert' ? 'storno' : ''}" data-verkauf="${esc(v.id)}">
+    <div class="avatar klein ${cm ? 'av-cm' : 'av-eb'}">${cm ? 'CM' : 'eB'}</div>
+    <div class="vz-mitte"><div class="vz-titel" title="${esc(v.artikel)}">${esc(v.artikel)}</div>
+      <div class="vz-unter">${dt(v.datum)} · ${esc(v.konto)}<span class="punkt-st ${st[0]}"></span>${esc(st[1])}${v.privat ? ' · 🏠 privat' : ''}${fehlt ? ' · <b class="warn-text">EK fehlt</b>' : ''}</div></div>
+    <div class="vz-rechts"><b>${eur(umsatzVon(v))}</b>${v.gewinn !== null && aktiv(v) ? `<div class="klein ${v.gewinn >= 0 ? 'plus' : 'minus'}">${v.gewinn >= 0 ? '+' : ''}${eur(v.gewinn)}</div>` : ''}</div>
   </div>`;
+}
+// Gleiche Artikel (gleicher Titel, Konto, Status) werden zu einer aufklappbaren Zeile „n×“ zusammengefasst
+let GRUPPE_NR = 0;
+function verkaufListe(L) {
+  const gruppen = [], idx = {};
+  L.forEach(v => { const k = v.artikel + '|' + v.konto + '|' + verkaufStatus(v)[1] + '|' + v.privat;
+    if (idx[k] === undefined) { idx[k] = gruppen.length; gruppen.push([]); } gruppen[idx[k]].push(v); });
+  return `<div class="vz-liste">${gruppen.map(G => {
+    if (G.length === 1) return zeileVerkauf(G[0]);
+    const v = G[0], cm = v.plattform === 'Cardmarket', st = verkaufStatus(v), id = 'grp' + (++GRUPPE_NR);
+    const summe = r2(G.reduce((s, x) => s + umsatzVon(x), 0));
+    const gew = G.filter(x => x.gewinn !== null && aktiv(x)), g = r2(gew.reduce((s, x) => s + x.gewinn, 0));
+    return `<div class="vz klickbar gruppe" data-grp="${id}">
+      <div class="avatar klein ${cm ? 'av-cm' : 'av-eb'}">${G.length}×</div>
+      <div class="vz-mitte"><div class="vz-titel" title="${esc(v.artikel)}">${esc(v.artikel)}</div>
+        <div class="vz-unter">${G.length} Verkäufe · ${esc(v.konto)}<span class="punkt-st ${st[0]}"></span>${esc(st[1])} · <span class="vz-auf">aufklappen ▾</span></div></div>
+      <div class="vz-rechts"><b>${eur(summe)}</b>${gew.length ? `<div class="klein ${g >= 0 ? 'plus' : 'minus'}">${g >= 0 ? '+' : ''}${eur(g)}</div>` : ''}</div>
+    </div><div class="vz-unterliste" id="${id}" hidden>${G.map(zeileVerkauf).join('')}</div>`;
+  }).join('')}</div>`;
 }
 
 function seiteVerkaeufe() {
   const f = S.filter.v || (S.filter.v = { suche: '', monat: '', plattform: '', konto: '', nur: '' });
+  if (!f.jahr) f.jahr = f.monat ? Number(f.monat.slice(0, 4)) : new Date().getFullYear();
+  if (!f.offen) f.offen = {};
+  const jahre = [...new Set(S.d.V.map(v => v.datum.getFullYear()).concat([new Date().getFullYear()]))].sort().reverse();
   const konten = [...new Set(S.d.V.map(kontoName))].sort();
-  const monate = [...new Set(S.d.V.map(v => v.monat))].filter(Boolean).sort().reverse();
-  let L = S.d.V.slice().sort((a, b) => b.datum - a.datum);
-  if (f.monat) L = L.filter(v => v.monat === f.monat);
-  if (f.plattform) L = L.filter(v => v.plattform === f.plattform);
-  if (f.konto) L = L.filter(v => kontoName(v) === f.konto);
-  if (f.nur === 'ekfehlt') L = L.filter(v => v.ek === null && aktiv(v) && v.status !== 'Unbezahlt');
-  if (f.nur === 'versenden') L = L.filter(v => /versenden|Bezahlt$/.test(v.status));
-  if (f.nur === 'privat') L = L.filter(v => v.privat);
-  if (f.suche) { const s = f.suche.toLowerCase(); L = L.filter(v => (v.artikel + ' ' + v.kaeufer + ' ' + v.bestellnr).toLowerCase().includes(s)); }
-  const summe = L.filter(aktiv).reduce((s, v) => s + umsatzVon(v), 0);
+  const basis = S.d.V.filter(v => v.datum.getFullYear() === f.jahr && (!f.konto || kontoName(v) === f.konto));
+  const FILTER = {
+    '': ['Alle', () => true],
+    versenden: ['📮 Noch versenden', v => versandOffen(v)],
+    ekfehlt: ['🧾 EK fehlt', v => v.ek === null && aktiv(v) && v.status !== 'Unbezahlt' && v.datum >= S.d.buchAb],
+    ebay: ['eBay', v => v.plattform === 'eBay'],
+    cardmarket: ['Cardmarket', v => v.plattform === 'Cardmarket'],
+    privat: ['🏠 Privat', v => v.privat],
+    storniert: ['Storniert / erstattet', v => /Storniert|Erstattet/.test(v.status)] };
+  if (f.plattform) f.nur = f.plattform.toLowerCase(), f.plattform = '';
+  if (!FILTER[f.nur || '']) f.nur = '';
+  const zaehl = k => basis.filter(FILTER[k][1]).length;
+  const passt = v => FILTER[f.nur || ''][1](v) && (!f.monat || v.monat === f.monat);
+  const GA = basis.filter(aktiv), umsatzJ = r2(GA.reduce((x, v) => x + umsatzVon(v), 0));
+  const k = { umsatz: umsatzJ, V: GA, gewinn: r2(GA.reduce((x, v) => x + (v.gewinn || 0), 0)), offen: GA.filter(v => v.gewinn === null).length };
   inhalt().innerHTML = `
     <h1>Verkäufe</h1>
     <div class="filter keindruck">
-      <input id="fSuche" placeholder="Suchen …" value="${esc(f.suche)}">
-      <select id="fMonat"><option value="">Alle Monate</option>${monate.map(m => `<option value="${m}" ${m === f.monat ? 'selected' : ''}>${monatName(m)}</option>`).join('')}</select>
-      <select id="fPlatt"><option value="">Alle Plattformen</option>${['eBay', 'Cardmarket'].map(p => `<option ${p === f.plattform ? 'selected' : ''}>${p}</option>`).join('')}</select>
-      <select id="fKonto"><option value="">Alle Konten</option>${konten.map(k => `<option ${k === f.konto ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
-      <select id="fNur"><option value="">Alle</option><option value="ekfehlt" ${f.nur === 'ekfehlt' ? 'selected' : ''}>EK fehlt</option><option value="versenden" ${f.nur === 'versenden' ? 'selected' : ''}>Noch versenden</option><option value="privat" ${f.nur === 'privat' ? 'selected' : ''}>Nur privat</option></select>
+      <div class="segment">${jahre.map(x => `<button data-vj="${x}" class="${x === f.jahr ? 'aktiv' : ''}">${x}</button>`).join('')}</div>
+      <input id="fSuche" placeholder="Suchen: Artikel, Käufer, Bestellnr. …" value="${esc(f.suche)}">
+      <select id="fKonto"><option value="">Alle Konten</option>${konten.map(x => `<option ${x === f.konto ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
     </div>
-    <p class="leise klein">${L.length} Verkäufe · gewerblicher Umsatz ${eur(r2(summe))}${L.some(v => v.privat) ? ` · privat ${eur(r2(L.filter(v => v.privat && v.status !== 'Storniert').reduce((s, v) => s + umsatzVon(v), 0)))} (zählt nicht)` : ''}</p>
-    <div class="liste">${L.slice(0, 200).map(zeileVerkauf).join('') || '<div class="leer">Keine Verkäufe gefunden.</div>'}</div>`;
-  const neu = () => { f.suche = $('#fSuche').value; f.monat = $('#fMonat').value; f.plattform = $('#fPlatt').value; f.konto = $('#fKonto').value; f.nur = $('#fNur').value; seiteVerkaeufe(); };
-  ['#fMonat', '#fPlatt', '#fKonto', '#fNur'].forEach(s => $(s).onchange = neu);
-  $('#fSuche').onchange = neu;
-  aktionenVerbinden();
+    <div class="chipleiste keindruck">${Object.entries(FILTER).map(([key, [name]]) => { const n = zaehl(key);
+      return key && !n ? '' : `<button data-nur="${key}" class="${(f.nur || '') === key ? 'aktiv' : ''}">${name}<span class="zahl">${n}</span></button>`; }).join('')}
+      ${f.monat ? `<button class="aktiv" data-monweg="1">${monatName(f.monat)} ✕</button>` : ''}</div>
+    <div class="kacheln mini">
+      <div class="kachel"><div class="wert">${eur(k.umsatz)}</div><div class="text">Umsatz ${f.jahr} (gewerblich)</div></div>
+      <div class="kachel"><div class="wert">${k.V.length}</div><div class="text">Verkäufe</div></div>
+      <div class="kachel nur-breit"><div class="wert">${k.V.length ? eur(r2(k.umsatz / k.V.length)) : '–'}</div><div class="text">Ø pro Verkauf</div></div>
+      <div class="kachel nur-breit"><div class="wert">${eur(k.gewinn)}</div><div class="text">Gewinn (${k.V.length - k.offen} mit EK)</div></div>
+    </div>
+    <div id="vListe"></div>`;
+  const malen = () => {
+    const s = (f.suche || '').toLowerCase().trim();
+    const L = basis.filter(v => passt(v) && (!s || (v.artikel + ' ' + v.kaeufer + ' ' + v.bestellnr + ' ' + v.konto).toLowerCase().includes(s)))
+      .sort((a, b) => b.datum - a.datum);
+    const proMonat = {};
+    L.forEach(v => (proMonat[v.monat] || (proMonat[v.monat] = [])).push(v));
+    const monate = Object.keys(proMonat).sort().reverse();
+    const allesAuf = !!(s || f.nur || f.monat);
+    const box = $('#vListe');
+    box.innerHTML = monate.map((key, i) => {
+      const M = proMonat[key], A = M.filter(aktiv);
+      const umsatz = r2(A.reduce((x, v) => x + umsatzVon(v), 0)), gewinn = r2(A.reduce((x, v) => x + (v.gewinn || 0), 0));
+      const offen = f.offen[key] !== undefined ? f.offen[key] : (allesAuf || i === 0);
+      const budget = umsatz > monatsBudget() ? `<span class="chip rot">⚠ über Budget</span>` : `<span class="chip gruen">✓ Budget</span>`;
+      let tage = '';
+      if (offen) {
+        const proTag = {};
+        M.forEach(v => (proTag[iso(v.datum)] || (proTag[iso(v.datum)] = [])).push(v));
+        tage = Object.keys(proTag).sort().reverse().map(t => {
+          const T = proTag[t], d = new Date(t + 'T12:00:00');
+          const tu = r2(T.filter(aktiv).reduce((x, v) => x + umsatzVon(v), 0));
+          return `<div class="tag-kopf"><span>${d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} · ${T.length} ${T.length === 1 ? 'Verkauf' : 'Verkäufe'}</span><span>${eur(tu)}</span></div>${verkaufListe(T)}`;
+        }).join('');
+      }
+      return `<div class="monat-karte ${offen ? 'offen' : ''}">
+        <button class="monat-kopf" data-mon="${key}"><span class="pfeil">▸</span><span class="mk-name">${monatName(key)}</span>
+          <span class="leise klein">${M.length} Verk.</span><span class="mk-luecke"></span>
+          <span class="mk-zahlen"><b>${eur(umsatz)}</b>${A.some(v => v.gewinn !== null) ? `<span class="klein ${gewinn >= 0 ? 'plus' : 'minus'}">${gewinn >= 0 ? '+' : ''}${eur(gewinn)}</span>` : ''}</span>${budget}</button>
+        ${offen ? `<div class="monat-inhalt">${tage}</div>` : ''}</div>`;
+    }).join('') || '<div class="leer">Keine Verkäufe gefunden.</div>';
+    box.querySelectorAll('[data-mon]').forEach(b => b.onclick = () => {
+      const key = b.dataset.mon, war = b.parentElement.classList.contains('offen'), y = window.scrollY;
+      f.offen[key] = !war; malen(); window.scrollTo(0, y);
+    });
+    aktionenVerbinden();
+  };
+  malen();
+  let warte;
+  $('#fSuche').oninput = e => { clearTimeout(warte); warte = setTimeout(() => { f.suche = e.target.value; f.offen = {}; malen(); }, 250); };
+  $('#fKonto').onchange = e => { f.konto = e.target.value; seiteVerkaeufe(); };
+  document.querySelectorAll('[data-vj]').forEach(b => b.onclick = () => { f.jahr = Number(b.dataset.vj); f.monat = ''; f.offen = {}; seiteVerkaeufe(); });
+  document.querySelectorAll('[data-nur]').forEach(b => b.onclick = () => { f.nur = b.dataset.nur; f.offen = {}; seiteVerkaeufe(); });
+  document.querySelectorAll('[data-monweg]').forEach(b => b.onclick = () => { f.monat = ''; f.offen = {}; seiteVerkaeufe(); });
 }
 
 function aktionenVerbinden() {
+  document.querySelectorAll('[data-grp]').forEach(k => k.onclick = () => {
+    const u = document.getElementById(k.dataset.grp); if (!u) return;
+    u.hidden = !u.hidden; k.classList.toggle('auf', !u.hidden);
+    const t = k.querySelector('.vz-auf'); if (t) t.textContent = u.hidden ? 'aufklappen ▾' : 'zuklappen ▴';
+  });
   document.querySelectorAll('[data-verkauf]').forEach(k => k.onclick = e => {
     if (e.target.closest('button, a, input, label')) return;
     verkaufDialog(k.dataset.verkauf);
@@ -641,35 +717,60 @@ async function belegLesen(datei) {
 }
 
 // ---------- Bestand ----------
+// Alter des Bestands: Ampel mit Text (nie nur Farbe)
+const ALTER_STUFEN = [
+  { key: 'frisch', name: 'Frisch (bis 45 Tage)', st: 'gut', test: t => t <= LADENHUETER_TAGE },
+  { key: 'alt', name: 'Ladenhüter (46–90 Tage)', st: 'warn', test: t => t > LADENHUETER_TAGE && t <= 90 },
+  { key: 'uralt', name: 'Über 90 Tage', st: 'krit', test: t => t > 90 }];
+const alterStufe = b => ALTER_STUFEN.find(s => s.test(tageIm(b)));
+// Produktarten in fester Reihenfolge → feste Farbe je Art (Farbe folgt der Art, nie dem Rang)
+const PRODUKTARTEN = ['Display / Booster-Box', 'Top-Trainer-Box', 'Booster-Bundle', 'Kollektion / Tin', 'Booster', 'Einzelkarte', 'Sonstige Ware', 'Sonstiges'];
+const artFarbe = art => { const i = PRODUKTARTEN.indexOf(art); return i >= 0 && i < 4 ? `var(--s${i + 1})` : 'var(--leise)'; };
+
+// Bestand als Kachel
 function zeileBestand(b) {
-  const tage = tageIm(b), mw = marktwertVon(b);
+  const tage = tageIm(b), mw = marktwertVon(b), stufe = b.rest > 0 ? alterStufe(b) : null;
   const plus = mw ? r2((mw - b.ekStueck) * b.rest) : null;
-  const alt = tage > LADENHUETER_TAGE && b.rest > 0;
-  const tipp = alt ? (mw ? `Tipp: für ca. ${eur(r2(Math.max(b.ekStueck * 1.05, mw * 0.92)))} anbieten – Kapital frei machen` : 'Tipp: Marktwert eintragen und Preis prüfen') : '';
-  return `<div class="eintrag ${alt ? 'offen' : ''}">
-    <div class="avatar av-be">${b.rest}</div>
-    <div class="haupt" title="${esc(b.produkt)}">${esc(b.produkt)}</div><div class="rechts">${eur(r2(b.rest * b.ekStueck))}</div>
-    <div class="unter"><span>${b.rest} von ${b.menge} · EK ${eur(b.ekStueck)}/Stk</span>
-      ${mw ? `<span>Markt ${eur(mw)}/Stk <b class="${plus >= 0 ? 'plus' : 'minus'}">${plus >= 0 ? '+' : ''}${eur(plus)}</b></span>` : '<span class="chip">Marktwert fehlt</span>'}
-      <span class="chip ${alt ? 'gelb' : ''}">${tage} Tage</span><span class="chip">${esc(b.status)}</span>
-      ${b.suchbegriff ? `<span>🔎 ${esc(b.suchbegriff)}</span>` : ''}</div>
-    ${tipp ? `<div class="unter" style="grid-column:2/4"><span class="warn">💡 ${tipp}</span></div>` : ''}
-    <div class="aktionen keindruck"><button class="knopf klein zwei" data-sku="${esc(b.id)}" title="Als SKU ins eBay-Angebot eintragen – dann wird der Verkauf automatisch zugeordnet">📋 SKU ${esc(b.id)}</button>
-      <button class="knopf klein zwei" data-artikel="${esc(b.id)}">Bearbeiten</button></div>
+  const anteil = b.menge ? Math.min(100, b.verkauft / b.menge * 100) : 0;
+  const art = produktart(b.produkt);
+  return `<div class="bk ${stufe && stufe.st !== 'gut' ? stufe.st : ''} ${b.rest ? '' : 'leer-bk'}" data-artikel="${esc(b.id)}" title="${esc(b.produkt)}">
+    <div class="bk-kopf"><span class="chip"><span class="punkt" style="background:${artFarbe(art)}"></span>${esc(art)}</span>
+      ${stufe ? `<span class="alter ${stufe.st}">${stufe.st === 'gut' ? '●' : '⚠'} ${tage} T.</span>` : `<span class="chip">${esc(b.status)}</span>`}</div>
+    <div class="bk-name">${esc(b.produkt)}</div>
+    <div class="bk-zahlen"><div><b>${b.rest}×</b><span>auf Lager</span></div><div><b>${eur(r2(b.rest * b.ekStueck))}</b><span>EK gesamt</span></div></div>
+    <div class="klein">${mw ? `Markt ${eur(mw)}/Stk · <b class="${plus >= 0 ? 'plus' : 'minus'}">${plus >= 0 ? '+' : ''}${eur(plus)}</b>` : '<span class="chip gelb">Marktwert fehlt</span>'}</div>
+    <div><div class="hb-bahn" style="height:6px"><div style="width:${anteil}%;background:var(--s3)"></div></div>
+      <div class="klein leise" style="margin-top:4px">${b.verkauft} von ${b.menge} verkauft · EK ${eur(b.ekStueck)}/Stk</div></div>
   </div>`;
 }
 
 function seiteBestand() {
-  const f = S.filter.b || (S.filter.b = { suche: '', alle: false, nur: '' });
-  let L = (f.alle ? S.d.B : f.nur === 'alt' ? ladenhueter() : imBestand()).slice().sort((a, b) => (a.datum || 0) - (b.datum || 0));
+  const f = S.filter.b || (S.filter.b = { suche: '', ansicht: 'lager', art: '', alter: '', sort: 'wert' });
+  if (!f.ansicht) { f.ansicht = f.alle ? 'alle' : 'lager'; f.alter = f.nur === 'alt' ? 'alt' : ''; f.sort = f.sort || 'wert'; f.art = f.art || ''; }
+  const basis = f.ansicht === 'alle' ? S.d.B.slice() : imBestand();
+  let L = basis.slice();
+  if (f.art) L = L.filter(b => produktart(b.produkt) === f.art);
+  if (f.alter) L = L.filter(b => b.rest > 0 && alterStufe(b).key === f.alter);
   if (f.suche) { const s = f.suche.toLowerCase(); L = L.filter(b => (b.produkt + ' ' + b.id + ' ' + (b.suchbegriff || '')).toLowerCase().includes(s)); }
+  const potenzial = b => { const mw = marktwertVon(b); return mw ? (mw - b.ekStueck) * b.rest : -1e9; };
+  const sortierer = { wert: (a, b) => b.rest * b.ekStueck - a.rest * a.ekStueck, alter: (a, b) => tageIm(b) - tageIm(a),
+    gewinn: (a, b) => potenzial(b) - potenzial(a), name: (a, b) => a.produkt.localeCompare(b.produkt) }[f.sort] || (() => 0);
+  L.sort(sortierer);
   const wert = L.reduce((s, b) => s + b.rest * b.ekStueck, 0);
   const markt = L.reduce((s, b) => s + b.rest * (marktwertVon(b) || b.ekStueck), 0);
   const stueck = L.reduce((s, b) => s + b.rest, 0);
+  // Übersicht über den ganzen Lagerbestand (ohne Filter), damit die Karten zum Filtern taugen
+  const lager = imBestand(), proArt = {}, proAlter = {};
+  lager.forEach(b => {
+    const a = produktart(b.produkt), x = proArt[a] || (proArt[a] = { w: 0, n: 0 }); x.w += b.rest * b.ekStueck; x.n += b.rest;
+    const st = alterStufe(b).key, y = proAlter[st] || (proAlter[st] = { w: 0, n: 0 }); y.w += b.rest * b.ekStueck; y.n += b.rest;
+  });
+  const maxArt = Math.max(1, ...Object.values(proArt).map(x => x.w)), maxAlter = Math.max(1, ...Object.values(proAlter).map(x => x.w));
+  const farbeSt = { gut: 'var(--gut)', warn: 'var(--warn)', krit: 'var(--krit)' };
   inhalt().innerHTML = `
     <h1>Bestand</h1>
     <div class="hero" style="padding:18px 20px">
-      <div class="label">Warenwert (Einkauf)</div>
+      <div class="label">Warenwert (Einkauf)${f.art || f.alter || f.suche ? ' · gefiltert' : ''}</div>
       <div class="gross" style="font-size:34px">${eur(r2(wert))}</div>
       <div class="reihe-h">
         <div class="pille"><div class="k">Marktwert</div><div class="w">${eur(r2(markt))}</div></div>
@@ -677,26 +778,48 @@ function seiteBestand() {
         <div class="pille"><div class="k">Stück</div><div class="w">${stueck}</div></div>
       </div>
     </div>
-    <div class="filter keindruck" style="margin-top:14px">
-      <input id="bSuche" placeholder="Suchen …" value="${esc(f.suche)}">
-      <select id="bAlle"><option value="">Nur vorhandene</option><option value="alt" ${f.nur === 'alt' ? 'selected' : ''}>Nur Ladenhüter (&gt; ${LADENHUETER_TAGE} Tage)</option><option value="alle" ${f.alle ? 'selected' : ''}>Alle (auch verkauft)</option></select>
+    <div class="raster zwei gleich" style="margin-top:14px">
+      <div class="karte"><div class="karte-kopf"><h3>Kapital nach Produktart</h3><span class="leise klein">antippen = filtern</span></div>
+        <div class="hbalken">${PRODUKTARTEN.filter(a => proArt[a]).map(a => `<div class="hb-zeile klickbar ${f.art && f.art !== a ? 'blass' : ''}" data-art="${esc(a)}">
+          <div class="hb-name"><span class="punkt" style="background:${artFarbe(a)}"></span>${esc(a)}</div>
+          <div class="hb-wert">${eur(r2(proArt[a].w))} <span class="leise klein">· ${proArt[a].n} Stk</span></div>
+          <div class="hb-bahn"><div style="width:${proArt[a].w / maxArt * 100}%;background:${artFarbe(a)}"></div></div></div>`).join('') || '<div class="leer">Kein Bestand.</div>'}</div></div>
+      <div class="karte"><div class="karte-kopf"><h3>Alter des Bestands</h3><span class="leise klein">antippen = filtern</span></div>
+        <div class="hbalken">${ALTER_STUFEN.map(s => `<div class="hb-zeile klickbar ${f.alter && f.alter !== s.key ? 'blass' : ''}" data-alter="${s.key}">
+          <div class="hb-name"><span class="status ${s.st}" style="padding:1px 8px">${s.st === 'gut' ? '✓' : '⚠'}</span> ${s.name}</div>
+          <div class="hb-wert">${eur(r2((proAlter[s.key] || { w: 0 }).w))} <span class="leise klein">· ${(proAlter[s.key] || { n: 0 }).n} Stk</span></div>
+          <div class="hb-bahn"><div style="width:${(proAlter[s.key] || { w: 0 }).w / maxAlter * 100}%;background:${farbeSt[s.st]}"></div></div></div>`).join('')}</div>
+        ${proAlter.alt || proAlter.uralt ? '<div class="klein leise" style="margin-top:8px">💡 Ladenhüter antippen: in den Details steht ein Preis-Tipp, um Kapital frei zu machen.</div>' : ''}</div>
     </div>
-    <p class="leise klein">${L.length} Positionen. Tipp: Trag die Artikel-ID als <b>SKU</b> in dein eBay-Angebot ein – dann wird der Verkauf automatisch zugeordnet.</p>
-    <div class="liste">${L.map(zeileBestand).join('') || '<div class="leer">Kein Bestand. Einkäufe erscheinen hier automatisch.</div>'}</div>`;
+    <div class="filter keindruck" style="margin-top:14px">
+      <input id="bSuche" placeholder="Suchen (Name, Artikel-ID) …" value="${esc(f.suche)}">
+      <div class="segment"><button data-ans="lager" class="${f.ansicht === 'lager' ? 'aktiv' : ''}">Auf Lager</button><button data-ans="alle" class="${f.ansicht === 'alle' ? 'aktiv' : ''}">Alle</button></div>
+      <select id="bSort"><option value="wert" ${f.sort === 'wert' ? 'selected' : ''}>Sortieren: höchster Wert</option><option value="alter" ${f.sort === 'alter' ? 'selected' : ''}>Sortieren: am ältesten</option>
+        <option value="gewinn" ${f.sort === 'gewinn' ? 'selected' : ''}>Sortieren: größter möglicher Gewinn</option><option value="name" ${f.sort === 'name' ? 'selected' : ''}>Sortieren: Name</option></select>
+    </div>
+    ${f.art || f.alter ? `<div class="chipleiste">${f.art ? `<button class="aktiv" data-weg="art">${esc(f.art)} ✕</button>` : ''}${f.alter ? `<button class="aktiv" data-weg="alter">${esc(ALTER_STUFEN.find(s => s.key === f.alter).name)} ✕</button>` : ''}</div>` : ''}
+    <p class="leise klein">${L.length} Artikel · Kachel antippen für Details, SKU und Verkäufe.</p>
+    <div class="bk-raster">${L.map(zeileBestand).join('') || '<div class="leer">Nichts gefunden.</div>'}</div>`;
   $('#bSuche').onchange = e => { f.suche = e.target.value; seiteBestand(); };
-  $('#bAlle').onchange = e => { f.alle = e.target.value === 'alle'; f.nur = e.target.value === 'alt' ? 'alt' : ''; seiteBestand(); };
-  document.querySelectorAll('[data-sku]').forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.sku); toast('SKU kopiert: ' + b.dataset.sku + ' – bei eBay ins Feld „SKU“ einfügen'); }
-    catch (e) { toast('SKU: ' + b.dataset.sku); }
-  });
+  $('#bSort').onchange = e => { f.sort = e.target.value; seiteBestand(); };
+  document.querySelectorAll('[data-ans]').forEach(b => b.onclick = () => { f.ansicht = b.dataset.ans; seiteBestand(); });
+  document.querySelectorAll('[data-art]').forEach(z => z.onclick = () => { f.art = f.art === z.dataset.art ? '' : z.dataset.art; seiteBestand(); });
+  document.querySelectorAll('[data-alter]').forEach(z => z.onclick = () => { f.alter = f.alter === z.dataset.alter ? '' : z.dataset.alter; seiteBestand(); });
+  document.querySelectorAll('[data-weg]').forEach(b => b.onclick = () => { f[b.dataset.weg] = ''; seiteBestand(); });
   aktionenVerbinden();
 }
 
 function artikelDialog(id) {
   const b = S.d.B.find(x => x.id === id);
   const st = S.d.e.bestandStatus || ['Bestellt', 'Auf Lager', 'Gelistet', 'Verkauft', 'Privat', 'Defekt', 'Retoure'];
+  const mw = marktwertVon(b), tage = tageIm(b), stufe = b.rest > 0 ? alterStufe(b) : null;
+  const tipp = stufe && stufe.st !== 'gut' ? (mw ? `Für ca. <b>${eur(r2(Math.max(b.ekStueck * 1.05, mw * 0.92)))}</b> pro Stück anbieten – knapp unter Marktwert, über EK – und Kapital frei machen.` : 'Marktwert eintragen und Preis prüfen.') : '';
+  const verk = S.d.Z.filter(z => z.artikelId === id && z.menge > 0).map(z => ({ z, v: S.d.V.find(v => v.id === z.verkaufId) })).filter(x => x.v);
   dialog(`<h2 style="margin-top:0">${esc(b.produkt)}</h2>
-    <div class="klein leise">${esc(b.id)} · gekauft ${dt(b.datum)} · ${b.menge} Stk · EK ${eur(b.ekStueck)}/Stk · verkauft ${b.verkauft}</div>
+    <div class="klein leise">${esc(b.id)} · gekauft ${dt(b.datum)} (${tage} Tage) · ${b.menge} Stk · EK ${eur(b.ekStueck)}/Stk · verkauft ${b.verkauft}</div>
+    ${tipp ? `<div class="hinweis klein">💡 ${tipp}</div>` : ''}
+    <div class="knopfleiste" style="margin-top:10px"><button class="knopf klein zwei" id="aSku" title="Als SKU ins eBay-Angebot eintragen – dann wird der Verkauf automatisch zugeordnet">📋 SKU ${esc(b.id)} kopieren</button></div>
+    ${verk.length ? `<div class="klein" style="margin-top:10px"><b>Verkauft über:</b> ${verk.map(x => `${dt(x.v.datum)} ${esc(x.v.plattform)} ${x.z.menge}× (${eur(umsatzVon(x.v))})`).join(' · ')}</div>` : ''}
     <label>Produkt</label><input id="aProd" value="${esc(b.produkt)}">
     <label>Suchbegriff (automatische Zuordnung)</label><input id="aSuch" value="${esc(b.suchbegriff)}">
     <div class="reihe"><div><label>Status</label><select id="aStat">${st.map(s => `<option ${s === b.status ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
@@ -707,6 +830,10 @@ function artikelDialog(id) {
     <label>Notiz</label><input id="aNotiz" value="${esc(b.notiz)}">
     <div class="knopfleiste"><button class="knopf" id="aOk">Speichern</button><button class="knopf zwei" onclick="dialogZu()">Abbrechen</button></div>`,
   box => {
+    $('#aSku', box).onclick = async () => {
+      try { await navigator.clipboard.writeText(b.id); toast('SKU kopiert: ' + b.id + ' – bei eBay ins Feld „SKU“ einfügen'); }
+      catch (e) { toast('SKU: ' + b.id); }
+    };
     $('#aOk', box).onclick = () => speichern('artikelAendern', { artikelId: id, felder: {
       produkt: $('#aProd', box).value, suchbegriff: $('#aSuch', box).value, status: $('#aStat', box).value,
       lagerort: $('#aOrt', box).value, notiz: $('#aNotiz', box).value, marktwert: $('#aMarkt', box).value } }, 'Gespeichert');
@@ -983,7 +1110,7 @@ function seiteAuswertung() {
     </div>
     <div class="kacheln">
       <div class="kachel"><div class="ic">💸</div><div class="wert">${eur(geb)}</div><div class="text">Gebühren (${umsatz ? Math.round(geb / umsatz * 100) : 0} %)</div></div>
-      <div class="kachel klickbar" onclick="portoDialog()" title="Welche Versandprodukte?"><div class="ic">✉</div><div class="wert">${eur(porto)}</div><div class="text">Porto / Etiketten ›</div></div>
+      <div class="kachel klickbar" onclick="versandUebersicht()" title="Welche Versandprodukte?"><div class="ic">✉</div><div class="wert">${eur(porto)}</div><div class="text">Porto / Etiketten ›</div></div>
       <div class="kachel"><div class="ic">🧮</div><div class="wert">${V.length ? eur(r2(umsatz / V.length)) : '–'}</div><div class="text">Ø pro Verkauf</div></div>
       <div class="kachel klickbar ${offen ? 'warnung' : ''}" onclick="filterSetzen('ekfehlt')"><div class="ic">🧾</div><div class="wert">${offen}</div><div class="text">ohne Einkaufspreis ›</div></div>
     </div>
@@ -994,7 +1121,7 @@ function seiteAuswertung() {
     ${topL.length ? `<h2>Top-Artikel</h2><div class="karte tabelle-scroll"><table><tr><th>Artikel</th><th>Stk</th><th>Umsatz</th><th>Gewinn</th></tr>
       ${topL.map(([k, t]) => `<tr><td style="white-space:normal">${esc(k)}</td><td>${t.n}</td><td>${eur(r2(t.u))}</td><td>${t.ok ? eur(r2(t.g)) : '–'}</td></tr>`).join('')}</table></div>` : ''}
     <h2>Verkäufe (${V.length})</h2>
-    <div class="liste">${V.slice(0, 150).map(zeileVerkauf).join('') || '<div class="leer">Keine Verkäufe in dieser Auswahl.</div>'}</div>`;
+    ${V.length ? verkaufListe(V.slice(0, 150)) : '<div class="leer">Keine Verkäufe in dieser Auswahl.</div>'}`;
   document.querySelectorAll('[data-j]').forEach(b => b.onclick = () => { a.jahr = Number(b.dataset.j); a.monate = []; seiteAuswertung(); });
   document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
     const k = b.dataset.m;
@@ -1053,7 +1180,7 @@ function versandProdukt(v) {
   if (/deutsche post/i.test(vs)) return { dienst: 'Deutsche Post', name: 'Sonstige Post-Sendung' };
   return { dienst: '', name: v.porto >= 4 ? 'Paket (Versanddienst unbekannt)' : 'Sonstige Sendung' };
 }
-function portoDialog() {
+function versandUebersicht() {
   const { V, titel } = S.portoAuswahl || { V: [], titel: '' };
   const mit = V.filter(v => v.porto !== null && v.porto > 0);
   const ohne = V.filter(v => v.porto === null && /Versendet|Angekommen|Teilweise/.test(v.status));
@@ -1079,7 +1206,7 @@ function portoDialog() {
     <p class="klein leise">Briefe erkenne ich am Preis (Deutsche Post: Standardbrief 0,95 €, Kompaktbrief 1,10 €, Großbrief 1,80 €, Maxibrief 2,90 €), Pakete am Versanddienst. Andere Beträge stehen mit ihrem Preis da.</p>
     <div class="knopfleiste"><button class="knopf zwei" onclick="dialogZu()">Schließen</button></div>`);
 }
-window.portoDialog = portoDialog;
+window.versandUebersicht = versandUebersicht;
 
 // ---------- Steuererklärung: Checkliste + ELSTER-Ausfüllhilfe ----------
 const privatKandidat = v => v.plattform === 'Cardmarket' || (v.plattform === 'eBay' && v.konto !== 'Haupt');
