@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -1304,16 +1304,52 @@ function erledigtSetzen(id, an) {
   try { localStorage.setItem('rb_erledigt', JSON.stringify(e)); } catch (x) { /* egal */ }
 }
 
+// Bestellinhalt aus dem Artikeltext: „2x Name + Name 2“ → [{menge, name}]
+function positionen(v) {
+  return String(v.artikel || '').split(' + ').map(t => t.trim()).filter(Boolean).map(t => {
+    const m = t.match(/^(\d+)\s*x\s+(.*)$/i);
+    return m ? { menge: Number(m[1]), name: m[2] } : { menge: 1, name: t };
+  });
+}
+
+// Was hat der Käufer bestellt? (zum Packen)
+function paketDialog(id) {
+  const v = S.d.V.find(x => x.id === id);
+  if (!v) return;
+  const P = positionen(v), stk = P.reduce((s, p) => s + p.menge, 0), erledigt = !!erledigtListe()[id];
+  dialog(`<h2 style="margin-top:0">📦 Bestellung ${esc(v.bestellnr)}</h2>
+    <div class="klein">👤 <b>${esc(v.kaeufer || 'Käufer unbekannt')}</b> · ${esc(v.plattform)} · ${esc(v.konto)} · bestellt ${dt(v.datum)}
+      · <span class="chip ${verkaufStatus(v)[0] === 'warn' ? 'gelb' : ''}">${esc(v.status)}</span></div>
+    <h3 style="margin:16px 0 8px">Inhalt: ${stk} Artikel</h3>
+    <div class="vz-liste">${P.map(p => `<div class="vz" style="grid-template-columns:auto minmax(0,1fr)">
+      <div class="avatar klein av-be">${p.menge}×</div><div style="white-space:normal;font-weight:600;font-size:14px">${esc(p.name)}</div></div>`).join('')}</div>
+    <div class="tabelle-scroll" style="margin-top:12px"><table>
+      <tr><td>Ware</td><td>${eur(v.vk)}</td></tr>
+      <tr><td>Versand (vom Käufer bezahlt)</td><td>${eur(v.versand)}</td></tr>
+      <tr class="gesamt"><td>Gesamt</td><td>${eur(umsatzVon(v))}</td></tr>
+    </table></div>
+    <div class="knopfleiste">
+      <button class="knopf" id="pdErl">${erledigt ? '↩ Doch noch nicht erledigt' : '✓ Gepackt – abhaken'}</button>
+      <a class="knopf zwei" href="${bestellLink(v)}" target="_blank" rel="noopener">Bestellung bei ${esc(v.plattform)} öffnen</a>
+      <button class="knopf zwei" id="pdMehr">Alle Details</button>
+    </div>`, box => {
+    $('#pdErl', box).onclick = () => { erledigtSetzen(id, !erledigt); dialogZu(); zeichnen(); };
+    $('#pdMehr', box).onclick = () => { dialogZu(); verkaufDialog(id); };
+  });
+}
+window.paketDialog = paketDialog;
+
 function seiteVersand() {
   const L = zuVersenden(), erl = erledigtListe(), alt = versandUnklar();
   const offen = L.filter(v => !erl[v.id]), fertig = L.filter(v => erl[v.id]);
   const gruppe = (titel, liste) => liste.length ? `<h2>${titel} <span class="chip">${liste.length}</span></h2>
-    <div class="liste">${liste.map(v => `<div class="eintrag versand ${erl[v.id] ? 'fertig' : ''}">
+    <div class="liste">${liste.map(v => { const P = positionen(v), stk = P.reduce((s, p) => s + p.menge, 0);
+      return `<div class="eintrag versand klickbar ${erl[v.id] ? 'fertig' : ''}" data-paket="${esc(v.id)}" title="Antippen: Inhalt ansehen">
       <label class="haken"><input type="checkbox" data-erl="${esc(v.id)}" ${erl[v.id] ? 'checked' : ''}><span></span></label>
-      <div class="haupt" title="${esc(v.artikel)}">${esc(v.artikel)}</div><div class="rechts">${eur(umsatzVon(v))}</div>
-      <div class="unter"><span>${dt(v.datum)} · ${esc(v.konto)}</span><span>an <b>${esc(v.kaeufer)}</b></span>
+      <div class="haupt">👤 ${esc(v.kaeufer || 'Käufer unbekannt')}</div><div class="rechts">${eur(umsatzVon(v))}</div>
+      <div class="unter"><span>Bestellnr. <b>${esc(v.bestellnr)}</b></span><span>${stk} ${stk === 1 ? 'Artikel' : 'Artikel'}</span><span>${dt(v.datum)} · ${esc(v.konto)}</span>
         <span class="chip ${Date.now() - v.datum > 2 * 864e5 ? 'gelb' : ''}">seit ${Math.max(0, Math.floor((Date.now() - v.datum) / 864e5))} Tagen</span>
-        <a href="${bestellLink(v)}" target="_blank" rel="noopener">Bestellung öffnen ›</a></div></div>`).join('')}</div>` : '';
+        <span class="paket-auf">Inhalt ansehen ›</span></div></div>`; }).join('')}</div>` : '';
   const cm = offen.filter(v => v.plattform === 'Cardmarket'), eb = offen.filter(v => v.plattform !== 'Cardmarket');
   inhalt().innerHTML = `
     <h1>Bestellungen</h1>
@@ -1342,6 +1378,10 @@ function seiteVersand() {
     erledigtSetzen(c.dataset.erl, c.checked); zeichnen();
     if (auf) { const d = document.querySelector('main details'); if (d) d.open = true; }
     window.scrollTo(0, y);
+  });
+  document.querySelectorAll('[data-paket]').forEach(z => z.onclick = e => {
+    if (e.target.closest('label, input, a, button')) return;   // Abhaken bleibt Abhaken
+    paketDialog(z.dataset.paket);
   });
   if (istHandy) { $('#btnHandyDruck').onclick = etikettenWaehlen; return; }
   $('#btnDruck').onclick = () => {

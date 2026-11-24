@@ -330,3 +330,6 @@ div.et-bild { height: 120px; display: grid; place-items: center; color: var(--le
 .design-wahl .ic { font-size: 24px; width: 32px; text-align: center; }
 .design-wahl b { display: block; }
 .design-wahl span.klein { color: var(--leise); }
+
+.paket-auf { color: var(--akzent); font-weight: 600; }
+.eintrag.versand.klickbar:hover { background: var(--flaeche-2); }
