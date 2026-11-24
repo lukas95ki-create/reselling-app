@@ -5,17 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Reselling-Buch</title>
   <meta name="description" content="Einkauf, Bestand, Verkauf und Buchhaltung">
-  <meta name="theme-color" content="#1f3a5f">
+  <meta name="theme-color" content="#eef1f6">
+  <script>
+    // Design sofort setzen (kein Aufblitzen): hell / dunkel / automatisch wie Handy/PC
+    try { var t = localStorage.getItem('rb_design'); if (t === 'hell') document.documentElement.dataset.theme = 'light'; else if (t === 'dunkel') document.documentElement.dataset.theme = 'dark'; } catch (e) {}
+  </script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
   <header class="kopf">
     <div class="logo">R</div>
     <div class="titel">Reselling-Buch</div>
     <div class="stand" id="stand"></div>
+    <button id="btnDesign" class="knopf-icon" title="Hell / Dunkel" aria-label="Design: hell oder dunkel">🌓</button>
     <button id="btnSync" class="knopf-icon" title="Neu laden" aria-label="Neu laden">⟳</button>
   </header>
   <nav class="nav" id="nav">
@@ -29,6 +34,6 @@
   <main id="inhalt"><div class="laden">Lade …</div></main>
   <div id="dialog" class="dialog" hidden><div class="dialog-box" id="dialogBox"></div></div>
   <div id="toast" class="toast" hidden></div>
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

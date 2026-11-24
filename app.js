@@ -2,7 +2,7 @@
  * Daten: Google-Tabelle über Apps-Script-Schnittstelle (Token). Kein Server, keine Kosten.
  */
 'use strict';
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 
 // ---------- Zustand ----------
 const S = { cfg: null, d: null, seite: 'start', filter: {}, jahr: new Date().getFullYear() };
@@ -1504,6 +1504,35 @@ function geheZu(seite) { S.seite = seite; zeichnen(); }
 window.geheZu = geheZu; window.dialogZu = dialogZu; window.ausgabeDialog = ausgabeDialog;
 
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { if (S.d) geheZu(b.dataset.seite); });
+
+// ---------- Design: hell / dunkel / automatisch (wie Handy/PC) ----------
+const DESIGNS = { auto: ['🌓', 'Automatisch', 'wie dein Handy bzw. PC eingestellt ist'], hell: ['☀️', 'Hell', 'immer hell'], dunkel: ['🌙', 'Dunkel', 'immer dunkel – schont abends die Augen'] };
+const systemDunkel = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function designModus() { try { return localStorage.getItem('rb_design') || 'auto'; } catch (e) { return 'auto'; } }
+function designAnwenden() {
+  const m = designModus(), el = document.documentElement;
+  if (m === 'hell') el.dataset.theme = 'light'; else if (m === 'dunkel') el.dataset.theme = 'dark'; else delete el.dataset.theme;
+  const dunkel = m === 'dunkel' || (m === 'auto' && systemDunkel && systemDunkel.matches);
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = dunkel ? '#0d1117' : '#eef1f6';
+  $('#btnDesign').textContent = DESIGNS[m][0];
+  $('#btnDesign').title = 'Design: ' + DESIGNS[m][1];
+}
+function designDialog() {
+  const m = designModus();
+  dialog(`<h2 style="margin-top:0">Design</h2>
+    <div class="design-wahl">${Object.entries(DESIGNS).map(([k, d]) => `<button data-design="${k}" class="${k === m ? 'aktiv' : ''}">
+      <span class="ic">${d[0]}</span><span><b>${d[1]}</b><span class="klein">${d[2]}</span></span></button>`).join('')}</div>
+    <div class="knopfleiste"><button class="knopf zwei" onclick="dialogZu()">Fertig</button></div>`, box => {
+    box.querySelectorAll('[data-design]').forEach(b => b.onclick = () => {
+      try { localStorage.setItem('rb_design', b.dataset.design); } catch (e) { /* egal */ }
+      designAnwenden(); designDialog();
+    });
+  });
+}
+$('#btnDesign').onclick = designDialog;
+if (systemDunkel && systemDunkel.addEventListener) systemDunkel.addEventListener('change', designAnwenden);
+designAnwenden();
+
 $('#btnSync').onclick = async () => {
   if (!S.cfg) return;
   $('#btnSync').classList.add('dreht');

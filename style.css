@@ -308,3 +308,25 @@ div.et-bild { height: 120px; display: grid; place-items: center; color: var(--le
 .vz-unterliste .vz { border-top: 1px dashed var(--linie); }
 
 @media (max-width: 759px) { .nur-breit { display: none !important; } }
+
+/* ---------- Dunkel per Schalter erzwungen (gleiche Werte wie „automatisch dunkel“) ---------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117; --flaeche: #161b22; --flaeche-2: #1c222b; --text: #eef1f5; --text-2: #b8c0cc; --leise: #8a94a3;
+  --linie: #2a313c; --akzent: #3987e5; --akzent-2: #9085e9;
+  --hero-1: #121a2e; --hero-2: #1d3a6e; --hero-3: #4b3fb0;
+  --gut-text: #46c46e;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --schatten: 0 1px 2px rgba(0,0,0,.3);
+}
+:root[data-theme="dark"] .status.warn, :root[data-theme="dark"] .chip.gelb,
+:root[data-theme="dark"] .alter.warn, :root[data-theme="dark"] .warn-text { color: var(--warn); }
+
+/* Design-Auswahl */
+.design-wahl { display: grid; gap: 10px; margin-top: 12px; }
+.design-wahl button { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 14px; cursor: pointer;
+  border: 2px solid var(--linie); background: var(--flaeche-2); text-align: left; font: inherit; color: var(--text); }
+.design-wahl button.aktiv { border-color: var(--akzent); background: color-mix(in srgb, var(--akzent) 10%, var(--flaeche)); }
+.design-wahl .ic { font-size: 24px; width: 32px; text-align: center; }
+.design-wahl b { display: block; }
+.design-wahl span.klein { color: var(--leise); }
